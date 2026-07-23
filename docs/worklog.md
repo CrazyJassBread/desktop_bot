@@ -50,3 +50,30 @@
 - 新增 `docs/development-guide.md`。
 - 记录完整请求调用链、路由决策树、`app/` 目录职责和核心修改入口。
 - 补充固定命令、ASR、LLM、传输层扩展步骤及常见故障排查顺序。
+
+## 2026-07-23：多模态 Runtime
+
+- 新增事件、状态、ServiceRegistry 和 DeviceAction 边界。
+- 新增 MediaPipe 手势识别、640×480 JPEG 校验和最近 20 帧缓存。
+- Victory 使用 3/5 帧投票切换 command / llm；游戏中的 Thumb_Up 使用 2/3
+  帧投票触发 jump。
+- 新增时间、跑酷游戏、信件和打印服务边界。
+- 新增 AssistantRuntime 和 AssistantDaemon，Audio/Vision 使用独立有界队列。
+- MediaPipe 0.10.35 与官方 gesture_recognizer.task 已完成本地 smoke test。
+
+## 2026-07-23：VAD 和唤醒门控
+
+- 新增 Silero v6 ONNX 流式后端，直接复用 faster-whisper 资产。
+- 新增 2 秒休眠 PCM 缓存、5 秒唤醒等待和 45 秒有效语句上限。
+- 新增 WakeWordBackend 和 Mock，“小A”真实声学模型尚未接入。
+- 新增小A文本别名清理、只说唤醒词后的 follow-up 窗口。
+- 项目配置默认关闭 LLM 多轮历史，同时保留 last_assistant_response。
+- 自动化验证更新为 61 passed、1 skipped；离线 smoke test 10/10。
+
+## 2026-07-23：文档重构
+
+- 新增 `docs/project-overview.md`，统一记录功能、架构、配置和生产缺口。
+- 重写设计说明和开发指南，使其覆盖 Audio、Vision、Runtime、Services、
+  线上信件与打印。
+- 明确区分已实现的 WakeWord 接口、尚未提供的真实“小A”模型，以及尚未实现的
+  ASR 关键词门控。

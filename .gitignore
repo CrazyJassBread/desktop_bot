@@ -11,6 +11,11 @@ models/*
 api.txt
 
 tests/
+!tests/
+tests/*
+!tests/test_services.py
+!tests/test_vad_stream.py
+!tests/test_vision.py
+!tests/test_wake_word.py
 
 records/
-

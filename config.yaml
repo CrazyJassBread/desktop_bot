@@ -32,7 +32,69 @@ llm:
   timeout_seconds: 30
   max_display_chars: 120
   max_spoken_chars: 180
+  history_enabled: false
 
 output:
   adapter: console
   json_output_path: output/latest_response.json
+
+# Streaming microphone input is gated before ASR. The existing WAV CLI remains valid.
+vad:
+  enabled: true
+  backend: silero
+  model: bundled
+  speech_threshold: 0.60
+  release_threshold: 0.35
+  min_speech_duration_ms: 250
+  min_silence_duration_ms: 800
+  speech_pad_ms: 200
+  pre_roll_ms: 200
+  max_utterance_seconds: 45
+
+wake_word:
+  enabled: true
+  backend: mock
+  phrase: 小A
+  aliases:
+    - 小a
+    - 小 A
+    - 小诶
+    - 小爱
+  score_threshold: 0.70
+  cooldown_ms: 1500
+  pre_roll_ms: 2000
+  activation_timeout_seconds: 5
+  single_turn: true
+
+vision:
+  enabled: true
+  backend: mediapipe
+  gesture_model: models/gesture_recognizer.task
+  image_width: 640
+  image_height: 480
+  max_image_bytes: 2097152
+  cache_capacity: 20
+  max_hands: 2
+  score_threshold: 0.70
+  mode_window_size: 5
+  mode_required_hits: 3
+  release_frames: 2
+  game_window_size: 3
+  game_required_hits: 2
+
+services:
+  time_enabled: true
+  runner_game_enabled: true
+  letter_enabled: false
+
+printing:
+  enabled: false
+  adapter: mock
+  max_pages_per_job: 10
+  max_pending_jobs: 20
+  letter_print_policy: require_confirmation
+
+remote:
+  enabled: false
+  adapter: webhook
+  timestamp_tolerance_seconds: 300

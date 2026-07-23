@@ -9,6 +9,7 @@ from typing import Any
 from app.asr.base import ASRBackend, ASRError
 from app.audio.loader import AudioData, load_wav
 from app.audio.validator import AudioProcessingError
+from app.audio.wake_word.text import strip_leading_wake_word
 from app.command.fixed_qa import match_fixed_qa
 from app.command.handlers import handle_command
 from app.config import AppConfig
@@ -88,6 +89,11 @@ class VoicePipeline:
             asr_started = time.perf_counter()
             try:
                 transcript = (await self.asr_backend.transcribe(audio)).strip()
+                if self.config.wake_word.enabled:
+                    transcript = strip_leading_wake_word(
+                        transcript,
+                        self.config.wake_word,
+                    )
             except ASRError:
                 raise
             except Exception as exc:
@@ -321,7 +327,11 @@ class VoicePipeline:
         metadata["llm_role"] = "conversation"
         LOGGER.info("calling llm session=%s", session.session_id)
         try:
-            reply = await self.llm_backend.generate(transcript, session)
+            reply = await self.llm_backend.generate(
+                transcript,
+                session,
+                include_history=self.config.llm.history_enabled,
+            )
         except LLMError:
             raise
         except Exception as exc:
@@ -330,7 +340,12 @@ class VoicePipeline:
             metadata["llm_latency_ms"] = round(
                 (time.perf_counter() - llm_started) * 1000, 2
             )
-        processed = self.response_processor.process(reply, transcript, session)
+        processed = self.response_processor.process(
+            reply,
+            transcript,
+            session,
+            update_history=self.config.llm.history_enabled,
+        )
         return AssistantResponse(
             success=True,
             mode=InteractionMode.LLM.value,

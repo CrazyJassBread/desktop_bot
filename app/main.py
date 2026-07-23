@@ -10,6 +10,8 @@ from pathlib import Path
 from app.asr.base import ASRBackend
 from app.asr.faster_whisper_backend import FasterWhisperBackend
 from app.asr.mock_backend import MockASRBackend
+from app.audio.vad.base import VADBackend
+from app.audio.vad.silero_backend import SileroVADBackend
 from app.config import AppConfig, ConfigurationError, load_config
 from app.llm.base import LLMBackend, LLMError
 from app.llm.client import OpenAICompatibleBackend
@@ -19,6 +21,8 @@ from app.output.console_adapter import ConsoleOutputAdapter
 from app.output.json_file_adapter import JsonFileOutputAdapter
 from app.runtime.pipeline import VoicePipeline
 from app.schemas import AudioRequest, ControlSignal
+from app.vision.base import GestureBackend
+from app.vision.mediapipe_gesture import MediaPipeGestureBackend
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,6 +89,27 @@ def build_llm(config: AppConfig) -> LLMBackend:
     raise ConfigurationError(
         "unsupported LLM backend: "
         f"{config.llm.backend}; expected mock, openai, or openai_compatible"
+    )
+
+
+def build_vad(config: AppConfig) -> VADBackend:
+    if config.vad.backend == "silero":
+        return SileroVADBackend(config.vad.model)
+    raise ConfigurationError(
+        f"unsupported VAD backend: {config.vad.backend}; expected silero"
+    )
+
+
+def build_gesture(config: AppConfig) -> GestureBackend:
+    if config.vision.backend == "mediapipe":
+        return MediaPipeGestureBackend(
+            config.vision.gesture_model,
+            config.vision.score_threshold,
+            config.vision.max_hands,
+        )
+    raise ConfigurationError(
+        "unsupported vision backend: "
+        f"{config.vision.backend}; expected mediapipe"
     )
 
 

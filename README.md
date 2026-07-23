@@ -1,9 +1,16 @@
-# 桌面 AI 助手电脑端语音处理程序
+# 桌面多模态 AI Bot
 
-基于 Python 3.11+ 的最小可用语音处理核心。当前以本地 PCM WAV 为输入，
-完成音频预处理、ASR、模式路由、固定命令 / 固定问答 / LLM、回答压缩，并输出
-统一 JSON。它不会真正操作 UI、扬声器或打印机，而是返回可由 Bot 端执行的
+基于 Python 3.11+ 的桌面机器人多模态交互核心。项目包含本地语音识别、VAD 和
+唤醒门控、MediaPipe 手势识别、模式与服务路由、LLM、游戏动作，以及线上信件和
+打印扩展边界。核心不会直接操作硬件，而是返回可由 Bot 设备层执行的结构化
 `action`。
+
+文档入口：
+
+- [完整项目总览](docs/project-overview.md)：功能、架构、状态和已知缺口
+- [设计说明](docs/design.md)：模块边界、状态和并发原则
+- [开发与调试指南](docs/development-guide.md)：扩展入口、设备接入和排错
+- [开发记录](docs/worklog.md)：阶段性变更
 
 ## 处理流程
 
@@ -19,16 +26,15 @@ WAV 文件
 → AssistantResponse JSON
 ```
 
-核心模块之间通过 `ASRBackend`、`LLMBackend`、`OutputAdapter` 和
-`DuplexTransportAdapter` 抽象接口解耦。详细设计见
-[docs/design.md](docs/design.md)。后续开发、扩展和排错请参考
-[开发与调试指南](docs/development-guide.md)。
+上图是仍受支持的单次 WAV 流程。长驻 Audio、Vision、多服务 Runtime 和当前
+部署状态请阅读[项目总览](docs/project-overview.md)。
 
 ## 两种交互模式
 
 - `command`：默认模式。优先匹配本地动作命令或固定问答；未匹配时默认调用一次
   指南智能体给出简短回答，但不会改变 session 模式。
-- `llm`：把识别文本交给 LLM，并保存每个 session 独立的最近 6 轮历史。
+- `llm`：把识别文本交给 LLM。`config.yaml` 默认关闭多轮历史，但仍保存最近
+  一次回答供打印功能使用。
 
 外部控制信号：
 
@@ -235,13 +241,64 @@ python -m scripts.smoke_test
 
 ## 尚未实现
 
-- Bot 与电脑之间的实时音频传输
+- 真实 Bot 麦克风与摄像头 Source
 - WebSocket / HTTP / 串口服务实现
+- 真实“小A”声学模型或 ASR 关键词门控
+- 统一多模态 CLI
 - TTS
 - 真实 UI、音量和播放控制
 - 真实打印机控制
 - session 数据库持久化
 
-后续传输接入需要实现 `DuplexTransportAdapter.receive_request()` 和
-`OutputAdapter.send_response()`，将协议消息转换为 `AudioRequest`，并把
-`AssistantResponse` 序列化回传。Pipeline 无需随协议变化。
+## 多服务 Runtime 与扩展接口
+
+项目现在提供一个与旧 `VoicePipeline` 兼容的多服务运行时骨架：
+
+```text
+Audio PCM -> streaming VAD -> valid utterance -> VoicePipeline
+JPEG 640x480 -> MediaPipe gesture -> 20-frame cache -> service action
+Remote event -> letter service -> bounded print queue
+```
+
+- `AssistantRuntime` 统一持有 session 模式、服务注册表和交互协调器。
+- `Victory` 使用 3/5 帧投票，在固定功能与持续 LLM 模式间切换。
+- 跑酷游戏运行时，`Thumb_Up` 使用 2/3 帧投票产生
+  `game.runner.jump`，持续举手不会重复触发。
+- `TimeService` 本地处理时间与日期问题。
+- 信件、远程入口与真实打印默认关闭；它们只提供接口、幂等和队列边界。
+
+视觉输入严格要求 JPEG 解码后为 `640 x 480 x 3` 的 RGB 图像。缓存只保留最近
+20 张已经完成识别的图像及检测结果。安装可选依赖：
+
+```bash
+pip install -r requirements-vision.txt
+pip install -r requirements-vad.txt
+```
+
+模型文件仍不进入 Git：
+
+```text
+models/gesture_recognizer.task
+```
+
+流式麦克风应输入 16 kHz 单声道 float32 PCM。`WakeGatedAudioPipeline` 在休眠
+时只运行唤醒词后端，并保留最近 2 秒内存音频；检测到“小A”后才启动 VAD 分段，
+有效语句最长 45 秒，然后由 `WakeGatedVoiceBridge` 调用 ASR。默认
+`vad.model=bundled` 会复用 faster-whisper 自带的 Silero v6 ONNX 模型，不需要
+安装完整 PyTorch。声学“小A”模型尚未随仓库提供，部署端需要实现
+`WakeWordBackend`；测试使用 `MockWakeWordBackend`，不会用 Whisper 扫描休眠
+音频。
+
+`AssistantDaemon` 提供 Audio/Vision 长驻 producer-consumer、有界音频队列和
+最新图像覆盖队列。有限测试 Source 结束时 `run()` 返回，真实设备 Source 可以
+作为持续异步迭代器一直运行。
+
+相关配置位于 `vad`、`vision`、`services`、`printing` 和 `remote` 段。仓库
+`config.yaml` 已启用 VAD 和视觉；线上信件、远程入口及真实打印默认关闭，必须
+由部署端显式启用并补齐安全适配。
+
+后续设备接入可以实现 `AudioFrameSource` / `ImageFrameSource`，也可以实现
+`DuplexTransportAdapter.receive_request()`。传输层负责把协议消息转换为
+`AudioRequest` / `ImageRequest`，并通过 `OutputAdapter` 返回
+`AssistantResponse` / `VisionResponse`；硬件动作由 `DeviceAction` 执行。
+核心 Pipeline 不需要随设备协议变化。
