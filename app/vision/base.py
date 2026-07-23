@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-from app.schemas import GestureDetection
+from app.models import GestureDetection
 
 
 class VisionError(Exception):

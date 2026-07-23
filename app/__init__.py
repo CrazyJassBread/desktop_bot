@@ -1,2 +1,1 @@
-"""Desktop AI assistant voice-processing package."""
-
+"""Continuous audio and vision perception service."""

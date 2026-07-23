@@ -1,15 +1,5 @@
-"""Application runtime orchestration."""
+"""Long-running perception runtime."""
 
-from app.runtime.assistant_runtime import AssistantRuntime
-from app.runtime.assistant_daemon import AssistantDaemon
-from app.runtime.pipeline import VoicePipeline
-from app.runtime.vad_voice_bridge import VADVoiceBridge
-from app.runtime.wake_voice_bridge import WakeGatedVoiceBridge
+from app.runtime.perception_daemon import PerceptionDaemon
 
-__all__ = [
-    "AssistantRuntime",
-    "AssistantDaemon",
-    "VADVoiceBridge",
-    "VoicePipeline",
-    "WakeGatedVoiceBridge",
-]
+__all__ = ["PerceptionDaemon"]

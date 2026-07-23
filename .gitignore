@@ -13,9 +13,10 @@ api.txt
 tests/
 !tests/
 tests/*
-!tests/test_services.py
+!tests/test_config.py
 !tests/test_vad_stream.py
-!tests/test_vision.py
-!tests/test_wake_word.py
+!tests/test_perception_runtime.py
 
 records/
+received_images/
+microphone.wav

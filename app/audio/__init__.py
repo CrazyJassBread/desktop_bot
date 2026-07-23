@@ -1,6 +1,5 @@
-"""Audio loading and preprocessing."""
+"""Continuous audio segmentation and keyword recognition."""
 
-from app.audio.loader import AudioData, load_wav
+from app.models import AudioData
 
-__all__ = ["AudioData", "load_wav"]
-
+__all__ = ["AudioData"]

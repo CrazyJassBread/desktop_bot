@@ -6,7 +6,7 @@ from collections import deque
 
 import numpy as np
 
-from app.schemas import GestureDetection
+from app.models import GestureDetection
 from app.vision.base import GestureBackend
 
 

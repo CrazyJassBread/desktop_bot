@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 import numpy as np
 
-from app.schemas import ImageRequest
+from app.models import ImageRequest
 
 
 class AudioFrameSource(ABC):

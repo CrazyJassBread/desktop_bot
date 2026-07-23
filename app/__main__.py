@@ -1,5 +1,3 @@
-"""Primary module entry point."""
-
 from app.hardware_main import main
 
 

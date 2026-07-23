@@ -1,6 +1,8 @@
-"""Interfaces reserved for future real-time transports."""
+"""Current Bot hardware input sources."""
 
-from app.transport.base import DuplexTransportAdapter
+from app.transport.hardware_sources import (
+    HTTPJPEGImageSource,
+    TCPPCMAudioSource,
+)
 
-__all__ = ["DuplexTransportAdapter"]
-
+__all__ = ["HTTPJPEGImageSource", "TCPPCMAudioSource"]

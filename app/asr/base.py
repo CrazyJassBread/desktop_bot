@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 
-from app.audio.loader import AudioData
+from app.models import AudioData
 
 
 class ASRError(Exception):
@@ -13,4 +13,3 @@ class ASRBackend(ABC):
     @abstractmethod
     async def transcribe(self, audio: AudioData) -> str:
         raise NotImplementedError
-

@@ -8,7 +8,7 @@ from threading import Lock
 from typing import Any
 
 from app.asr.base import ASRBackend, ASRError
-from app.audio.loader import AudioData
+from app.models import AudioData
 
 
 class FasterWhisperBackend(ASRBackend):
@@ -55,7 +55,7 @@ class FasterWhisperBackend(ASRBackend):
                 audio.samples,
                 language=self.language,
                 task="transcribe",
-                vad_filter=True,
+                vad_filter=False,
             )
             return "".join(segment.text for segment in segments).strip()
         except ASRError:

@@ -7,9 +7,9 @@ from pathlib import Path
 
 import numpy as np
 
-from app.audio.loader import AudioData
 from app.audio.vad.base import VADBackend
 from app.config import VADConfig
+from app.models import AudioData
 
 
 class StreamingAudioPipeline:
