@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+logs/*.log
+output/*.json
+models/*
+!models/.gitkeep
+.env
+
+api.txt
+
+tests/
+
+records/
+

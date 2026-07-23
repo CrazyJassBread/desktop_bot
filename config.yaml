@@ -1,0 +1,38 @@
+audio:
+  target_sample_rate: 16000
+  min_duration_seconds: 0.25
+  max_duration_seconds: 30
+  normalize: true
+  trim_silence: false
+
+asr:
+  backend: faster_whisper
+  model: models/faster-whisper-small
+  model_dir: models
+  device: cpu
+  compute_type: int8
+  language: zh
+
+interaction:
+  default_mode: command
+  unmatched_command_behavior: guide
+  max_history_turns: 6
+
+command:
+  fuzzy_match: true
+  fuzzy_threshold: 82
+  ambiguity_margin: 8
+  dangerous_action_threshold: 90
+
+llm:
+  backend: openai_compatible
+  base_url: https://api.deepseek.com
+  api_key_env: DEEPSEEK_API_KEY
+  model: "deepseek-v4-flash"
+  timeout_seconds: 30
+  max_display_chars: 120
+  max_spoken_chars: 180
+
+output:
+  adapter: console
+  json_output_path: output/latest_response.json
