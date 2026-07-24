@@ -471,7 +471,7 @@ async function answerTurtleSoup({ question, story, history = [] }) {
 function printerBaseUrl() {
   const configured = process.env.ESP_PRINTER_BASE_URL ?? process.env.ESP32_PRINTER_BASE_URL;
   if (configured) return configured.replace(/\/+$/, "");
-  return `http://${process.env.ESP_PRINTER_IP ?? "10.76.7.129"}`;
+  return `http://${process.env.ESP_PRINTER_IP ?? "10.76.10.141"}`;
 }
 
 function normalizePrintOptions(input = {}) {

@@ -3,7 +3,7 @@ import argparse
 import requests
 
 
-DEFAULT_ESP_IP = "10.76.7.129"
+DEFAULT_ESP_IP = "10.76.10.141"
 DEFAULT_TEXT = "A"
 
 

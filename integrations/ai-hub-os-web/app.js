@@ -22,12 +22,72 @@ const DEFAULT_TURTLE_GAME = {
 };
 
 const MATCH_INTEREST_OPTIONS = ["AI", "机器人", "ESP32", "摄影", "游戏", "阅读", "音乐", "旅行", "手帐", "插画", "开源", "自然", "生活", "猫"];
+const MATCH_INTEREST_META = {
+  AI: ["✦", "一起发现新鲜工具"], 机器人: ["◉", "聊机器人与陪伴"], ESP32: ["⌁", "分享小小创造"],
+  摄影: ["▣", "交换镜头里的日常"], 游戏: ["◆", "找一个轻松玩伴"], 阅读: ["▤", "分享最近读到的句子"],
+  音乐: ["♪", "交换循环播放的歌"], 旅行: ["⌖", "听彼此城市的故事"], 手帐: ["✎", "记录柔软的小事"],
+  插画: ["◒", "一起画下灵感"], 开源: ["⌘", "让好点子彼此生长"], 自然: ["❋", "喜欢风、树和散步"],
+  生活: ["☕", "聊普通却真实的一天"], 猫: ["⌁", "当然也聊猫"]
+};
+const MATCH_QUIZ_STEPS = [
+  {
+    key: "interests", eyebrow: "YOUR LITTLE UNIVERSE", title: "哪些事会让你眼睛发亮？",
+    hint: "选 3–6 个就很好，我们会先从共同兴趣开始。", multiple: true,
+    options: MATCH_INTEREST_OPTIONS.map((value) => ({ value, icon: MATCH_INTEREST_META[value][0], detail: MATCH_INTEREST_META[value][1] }))
+  },
+  {
+    key: "goal", eyebrow: "A GOOD BEGINNING", title: "你想遇见怎样的关系？",
+    hint: "没有标准答案，选此刻最期待的一种。", multiple: false,
+    options: [
+      { value: "慢慢写信", icon: "✉", detail: "认真写一封不着急的信" },
+      { value: "兴趣搭子", icon: "✦", detail: "从共同爱好开始聊天" },
+      { value: "学习伙伴", icon: "↗", detail: "互相鼓励，一起变得更好" },
+      { value: "分享日常", icon: "☕", detail: "交换生活里微小的瞬间" }
+    ]
+  },
+  {
+    key: "pace", eyebrow: "YOUR RHYTHM", title: "怎样的联系频率最舒服？",
+    hint: "之后随时可以回来修改。", multiple: false,
+    options: [
+      { value: "慢慢回信", icon: "◔", detail: "几天一封，给彼此留一点余白" },
+      { value: "常常聊聊", icon: "◑", detail: "有空就分享，保持自然联系" },
+      { value: "偶尔遇见", icon: "○", detail: "不设压力，想起时再打招呼" }
+    ]
+  },
+  {
+    key: "distance", eyebrow: "NEAR OR FAR", title: "你想遇见哪里的朋友？",
+    hint: "距离只是故事的一部分。", multiple: false,
+    options: [
+      { value: "世界各地", icon: "◎", detail: "让不同文化带来新鲜视角" },
+      { value: "附近城市", icon: "⌖", detail: "优先认识生活半径相近的人" },
+      { value: "都可以", icon: "∞", detail: "只要聊得来，远近都很好" }
+    ]
+  }
+];
 const DAILY_BRIEFING_SOURCE_OPTIONS = ["AI新闻", "科技产品", "开源项目", "财经", "美股", "汇率", "天气", "日历"];
+
+function loadMatchProfile() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("aihub-match-profile") ?? "null");
+    if (saved && Array.isArray(saved.interests)) return saved;
+  } catch {}
+  return {
+    interests: ["AI", "机器人", "阅读"],
+    goal: "",
+    pace: "",
+    distance: "",
+    completedAt: null
+  };
+}
+
+const initialMatchProfile = loadMatchProfile();
 
 const ui = {
   category: "全部",
   query: "",
-  matchPreferences: ["AI", "机器人", "阅读"],
+  matchPreferences: [...initialMatchProfile.interests],
+  matchProfile: initialMatchProfile,
+  matchQuizStep: 0,
   letterBox: "inbox",
   selectedLetterId: null,
   simulatorConnected: false,
@@ -72,10 +132,18 @@ const nav = [
 
 const mobileNav = [
   ["/", "首页", "home"],
+  ["/community", "社区", "community"],
+  ["/match", "匹配", "match"],
+  ["/letter", "信件", "letter"]
+];
+
+const mobileMoreNav = [
   ["/education", "学习", "book"],
   ["/entertainment", "娱乐", "game"],
   ["/life", "生活", "heart"],
-  ["/community", "社区", "community"]
+  ["/device", "设备", "device"],
+  ["/profile", "我的", "profile"],
+  ["/create-post", "发布", "plus"]
 ];
 
 const paths = {
@@ -136,11 +204,12 @@ function formatTime(value) {
 
 function currentPath() {
   const path = window.location.pathname.replace(/\/+$/, "") || "/";
-  const allowed = ["/", "/community", "/create-post", "/education", "/entertainment", "/life", "/match", "/letter", "/letter/create", "/device", "/profile", "/login", "/register", "/admin"];
+  const allowed = ["/", "/community", "/create-post", "/education", "/entertainment", "/life", "/match", "/match/preferences", "/letter", "/letter/create", "/device", "/profile", "/login", "/register", "/admin"];
   return allowed.includes(path) ? path : "/";
 }
 
 function navigate(path) {
+  document.body.classList.remove("mobile-menu-open");
   history.pushState({}, "", path);
   render();
   window.scrollTo({ top: 0, behavior: "instant" });
@@ -189,7 +258,8 @@ function logo() {
 }
 
 function shell(content, activePath = currentPath()) {
-  const active = activePath.startsWith("/letter") ? "/letter" : activePath;
+  const active = activePath.startsWith("/letter") ? "/letter" : activePath.startsWith("/match") ? "/match" : activePath;
+  const moreActive = mobileMoreNav.some(([path]) => path === activePath);
   return `<div class="hub-app">
     <header class="topbar">
       <button class="hub-logo" data-nav="/" aria-label="AI Hub OS 首页">${logo()}</button>
@@ -204,8 +274,14 @@ function shell(content, activePath = currentPath()) {
       </div>
     </header>
     <main class="hub-main">${content}</main>
+    <div class="mobile-more-backdrop" data-mobile-menu-close></div>
+    <aside class="mobile-more-sheet" aria-label="更多功能" aria-hidden="true">
+      <header><div><p class="eyebrow">EXPLORE</p><h2>更多空间</h2></div><button class="round-button" type="button" data-mobile-menu-close aria-label="关闭">${icon("close", 18)}</button></header>
+      <div>${mobileMoreNav.map(([path, label, iconName]) => `<button data-nav="${path}" class="${activePath === path ? "active" : ""}"><span>${icon(iconName, 21)}</span><b>${label}</b></button>`).join("")}</div>
+    </aside>
     <nav class="mobile-nav" aria-label="移动端导航">
       ${mobileNav.map(([path, label, iconName]) => `<button data-nav="${path}" class="${active === path ? "active" : ""}">${icon(iconName, 19)}<span>${label}</span></button>`).join("")}
+      <button type="button" data-mobile-menu class="${moreActive ? "active" : ""}">${icon("more", 19)}<span>更多</span></button>
     </nav>
   </div>`;
 }
@@ -632,12 +708,20 @@ function preferenceAdjustedMatch(match) {
 }
 
 function matchPreferencePanel() {
-  const selected = new Set(ui.matchPreferences);
-  return `<article class="match-preferences">
-    <div class="match-preferences-head"><div><p class="eyebrow">PREFERENCES</p><h2>偏好设置</h2></div><button type="button" class="text-button" data-match-pref-clear>清空</button></div>
-    <div class="preference-chip-list">
-      ${MATCH_INTEREST_OPTIONS.map((item) => `<button type="button" data-match-pref="${escapeHtml(item)}" class="${selected.has(item) ? "active" : ""}">${escapeHtml(item)}</button>`).join("")}
+  const completed = Boolean(ui.matchProfile.completedAt);
+  const interests = ui.matchPreferences.length ? ui.matchPreferences : ["还没有选择"];
+  return `<article class="match-preference-entry ${completed ? "completed" : ""}">
+    <div class="preference-entry-art" aria-hidden="true">
+      <span>${MATCH_INTEREST_META[ui.matchPreferences[0]]?.[0] ?? "✦"}</span>
+      <i></i><i></i><i></i>
     </div>
+    <div class="preference-entry-copy">
+      <p class="eyebrow">${completed ? "YOUR MATCH PROFILE" : "A TINY QUESTIONNAIRE"}</p>
+      <h2>${completed ? "你的偏好，随时可以改变" : "先认识一下你的兴趣宇宙"}</h2>
+      <p>${completed ? "新的选择会立即参与匹配排序，不需要重新注册。" : "只需要点选，不用填写长表格，大约 1 分钟完成。"}</p>
+      <div class="preference-summary-chips">${interests.slice(0, 6).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>
+    </div>
+    <button type="button" class="primary-button" data-nav="/match/preferences">${completed ? "调整偏好" : "开始选择"}${icon("arrow", 16)}</button>
   </article>`;
 }
 
@@ -645,7 +729,7 @@ async function matchView() {
   const data = await api.matches();
   const matches = data.items.map(preferenceAdjustedMatch).sort((left, right) => right.score - left.score || (right.preferenceHits?.length ?? 0) - (left.preferenceHits?.length ?? 0));
   return `<section class="page match-page" id="match-view">
-    ${pageHead("FIND YOUR PEOPLE", "遇见可能聊得来的人", "看看今天想和谁写一封信。")}
+    ${pageHead("FIND YOUR PEOPLE", "遇见可能聊得来的人", "看看今天想和谁写一封信。", `<button class="outline-button match-head-preference" data-nav="/match/preferences">${icon("settings", 16)}偏好</button>`)}
     ${matchPreferencePanel()}
     <div class="match-grid">
       ${matches.map((match) => `<article class="match-card" data-match-card="${match.user.id}">
@@ -657,6 +741,58 @@ async function matchView() {
           <div class="match-actions"><button class="primary-button" data-write-to="${match.user.id}">${icon("letter", 16)}写一封信</button><button class="outline-button" data-follow-user="${match.user.id}">${match.followed ? "已关注" : "关注"}</button><button class="round-button" data-pass-user="${match.user.id}" title="暂不感兴趣">${icon("close", 16)}</button></div>
         </div>
       </article>`).join("")}
+    </div>
+  </section>`;
+}
+
+function matchPreferenceValue(step) {
+  return step.multiple ? ui.matchPreferences : ui.matchProfile[step.key];
+}
+
+function matchPreferenceQuizView() {
+  const stepIndex = Math.max(0, Math.min(MATCH_QUIZ_STEPS.length - 1, ui.matchQuizStep));
+  const step = MATCH_QUIZ_STEPS[stepIndex];
+  const value = matchPreferenceValue(step);
+  const selected = new Set(Array.isArray(value) ? value : value ? [value] : []);
+  const selectedInterests = ui.matchPreferences.length ? ui.matchPreferences : ["等待你的选择"];
+  return `<section class="page match-preference-page">
+    <button class="quiz-back-link" type="button" data-nav="/match">${icon("arrow", 15)}返回匹配</button>
+    <div class="match-quiz-shell">
+      <aside class="match-quiz-visual">
+        <div class="quiz-constellation" aria-hidden="true">
+          <span class="quiz-heart">✦</span>
+          ${selectedInterests.slice(0, 6).map((item, index) => `<i style="--i:${index}">${escapeHtml(item)}</i>`).join("")}
+        </div>
+        <div>
+          <p class="eyebrow">AI HUB MATCH</p>
+          <h2>把喜欢的事，<br>变成认识彼此的开始。</h2>
+          <p>这里没有考试，也没有标准答案。你每次改变兴趣，推荐都会跟着更新。</p>
+        </div>
+      </aside>
+      <article class="match-quiz-card">
+        <header class="quiz-progress">
+          <span>STEP ${stepIndex + 1} / ${MATCH_QUIZ_STEPS.length}</span>
+          <div>${MATCH_QUIZ_STEPS.map((_, index) => `<i class="${index <= stepIndex ? "active" : ""}"></i>`).join("")}</div>
+        </header>
+        <div class="quiz-question">
+          <p class="eyebrow">${step.eyebrow}</p>
+          <h1>${step.title}</h1>
+          <p>${step.hint}</p>
+        </div>
+        <div class="quiz-options ${step.multiple ? "interest-options" : ""}">
+          ${step.options.map((option) => `<button type="button" data-quiz-option="${escapeHtml(option.value)}" class="${selected.has(option.value) ? "selected" : ""}">
+            <span>${escapeHtml(option.icon)}</span>
+            <b>${escapeHtml(option.value)}</b>
+            <small>${escapeHtml(option.detail)}</small>
+            <i>${icon("check", 13)}</i>
+          </button>`).join("")}
+        </div>
+        <footer class="quiz-footer">
+          <button type="button" class="text-button" data-quiz-previous ${stepIndex === 0 ? "disabled" : ""}>上一步</button>
+          <small>${step.multiple ? `已选择 ${selected.size} 项` : selected.size ? "很好，就选这个" : "请选择一项"}</small>
+          <button type="button" class="primary-button" data-quiz-next>${stepIndex === MATCH_QUIZ_STEPS.length - 1 ? "完成并开始匹配" : "继续"}${icon("arrow", 15)}</button>
+        </footer>
+      </article>
     </div>
   </section>`;
 }
@@ -861,7 +997,7 @@ async function render() {
   const titles = {
     "/": "首页", "/community": "社区广场", "/create-post": "发布",
     "/education": "学习空间", "/entertainment": "娱乐空间", "/life": "生活空间",
-    "/match": "匹配中心", "/letter": "我的信件", "/letter/create": "写信",
+    "/match": "匹配中心", "/match/preferences": "匹配偏好", "/letter": "我的信件", "/letter/create": "写信",
     "/device": "设备中心", "/profile": "个人主页", "/admin": "Admin",
     "/login": "登录", "/register": "注册"
   };
@@ -883,6 +1019,7 @@ async function render() {
       "/entertainment": entertainmentView,
       "/life": lifeView,
       "/match": matchView,
+      "/match/preferences": matchPreferenceQuizView,
       "/letter": letterView,
       "/letter/create": letterCreateView,
       "/device": deviceView,
@@ -903,6 +1040,14 @@ async function render() {
 
 function wireNavigation() {
   document.querySelectorAll("[data-nav]").forEach((element) => element.addEventListener("click", () => navigate(element.dataset.nav)));
+  const setMobileMenu = (open) => {
+    document.querySelector(".mobile-more-sheet")?.classList.toggle("open", open);
+    document.querySelector(".mobile-more-backdrop")?.classList.toggle("open", open);
+    document.querySelector(".mobile-more-sheet")?.setAttribute("aria-hidden", String(!open));
+    document.body.classList.toggle("mobile-menu-open", open);
+  };
+  document.querySelector("[data-mobile-menu]")?.addEventListener("click", () => setMobileMenu(true));
+  document.querySelectorAll("[data-mobile-menu-close]").forEach((element) => element.addEventListener("click", () => setMobileMenu(false)));
 }
 
 async function openPost(id) {
@@ -1765,17 +1910,49 @@ function wire() {
     sessionStorage.setItem("aihub-recipient", element.dataset.writeTo);
     navigate("/letter/create");
   }));
-  document.querySelectorAll("[data-match-pref]").forEach((element) => element.addEventListener("click", () => {
-    const value = element.dataset.matchPref;
-    const next = new Set(ui.matchPreferences);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    ui.matchPreferences = [...next];
+  document.querySelectorAll("[data-quiz-option]").forEach((element) => element.addEventListener("click", () => {
+    const step = MATCH_QUIZ_STEPS[ui.matchQuizStep];
+    const value = element.dataset.quizOption;
+    if (step.multiple) {
+      const next = new Set(ui.matchPreferences);
+      if (next.has(value)) next.delete(value);
+      else if (next.size < 6) next.add(value);
+      else {
+        toast("最多选择 6 个，留一点空间给新的兴趣");
+        return;
+      }
+      ui.matchPreferences = [...next];
+      ui.matchProfile = { ...ui.matchProfile, interests: [...next] };
+    } else {
+      ui.matchProfile = { ...ui.matchProfile, [step.key]: value };
+    }
     render();
   }));
-  document.querySelector("[data-match-pref-clear]")?.addEventListener("click", () => {
-    ui.matchPreferences = [];
+  document.querySelector("[data-quiz-previous]")?.addEventListener("click", () => {
+    ui.matchQuizStep = Math.max(0, ui.matchQuizStep - 1);
     render();
+  });
+  document.querySelector("[data-quiz-next]")?.addEventListener("click", () => {
+    const step = MATCH_QUIZ_STEPS[ui.matchQuizStep];
+    const value = matchPreferenceValue(step);
+    if ((Array.isArray(value) && !value.length) || (!Array.isArray(value) && !value)) {
+      toast(step.multiple ? "先选一个让你感兴趣的话题吧" : "选一个最接近你的答案吧");
+      return;
+    }
+    if (ui.matchQuizStep < MATCH_QUIZ_STEPS.length - 1) {
+      ui.matchQuizStep += 1;
+      render();
+      return;
+    }
+    ui.matchProfile = {
+      ...ui.matchProfile,
+      interests: [...ui.matchPreferences],
+      completedAt: new Date().toISOString()
+    };
+    localStorage.setItem("aihub-match-profile", JSON.stringify(ui.matchProfile));
+    ui.matchQuizStep = 0;
+    toast("偏好已保存，正在为你重新匹配", "success");
+    navigate("/match");
   });
   document.querySelectorAll("[data-follow-user]").forEach((element) => element.addEventListener("click", async () => {
     await api.matchFeedback(element.dataset.followUser, "FOLLOWED");
