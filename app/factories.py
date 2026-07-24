@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from app.asr.base import ASRBackend
@@ -25,6 +26,38 @@ def setup_logging(log_path: Path = Path("logs/perception.log")) -> None:
             logging.StreamHandler(),
         ],
     )
+
+
+def setup_llm_logging(
+    log_path: Path | str = Path("logs/llm.log"),
+) -> logging.Logger:
+    path = Path(log_path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("desktop_assistant.llm_session")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    for handler in logger.handlers:
+        if (
+            isinstance(handler, RotatingFileHandler)
+            and Path(handler.baseFilename).resolve() == path
+        ):
+            return logger
+    for handler in tuple(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    handler = RotatingFileHandler(
+        path,
+        maxBytes=2_000_000,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s %(message)s"
+        )
+    )
+    logger.addHandler(handler)
+    return logger
 
 
 def build_asr(config: AppConfig) -> ASRBackend:
