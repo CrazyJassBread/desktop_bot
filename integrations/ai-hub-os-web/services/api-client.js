@@ -128,6 +128,16 @@ export const api = {
     method: "POST",
     body: JSON.stringify(payload)
   }),
+  dailyBriefings: () => request("/daily-briefings"),
+  updateDailyBriefing: (id, payload) => request(`/daily-briefings/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Idempotency-Key": idempotencyKey() },
+    body: JSON.stringify(payload)
+  }),
+  previewDailyBriefing: (id) => request(`/daily-briefings/${encodeURIComponent(id)}/preview`, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey() }
+  }),
   devices: () => request("/devices"),
   deviceStatus: (id) => request(`/devices/${encodeURIComponent(id)}/status`),
   updatePrintPolicy: (id, policy, version) => request(`/devices/${encodeURIComponent(id)}/print-policy`, {

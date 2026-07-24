@@ -22,6 +22,7 @@ const DEFAULT_TURTLE_GAME = {
 };
 
 const MATCH_INTEREST_OPTIONS = ["AI", "机器人", "ESP32", "摄影", "游戏", "阅读", "音乐", "旅行", "手帐", "插画", "开源", "自然", "生活", "猫"];
+const DAILY_BRIEFING_SOURCE_OPTIONS = ["AI新闻", "科技产品", "开源项目", "财经", "美股", "汇率", "天气", "日历"];
 
 const ui = {
   category: "全部",
@@ -291,8 +292,23 @@ function deviceMini(device) {
   </article>`;
 }
 
+function dailyBriefingCard(briefing) {
+  const sources = new Set(briefing.sources ?? []);
+  return `<article class="daily-briefing-card">
+    <header>
+      <span><p class="eyebrow">${briefing.category === "finance" ? "MARKET" : "DAILY NEWS"}</p><h3>${escapeHtml(briefing.title)}</h3></span>
+      <button type="button" class="mini-switch ${briefing.enabled ? "active" : ""}" data-briefing-toggle="${escapeHtml(briefing.id)}" data-enabled="${briefing.enabled ? "true" : "false"}">${briefing.enabled ? "ON" : "OFF"}</button>
+    </header>
+    <label class="briefing-time">时间<input type="time" value="${escapeHtml(briefing.time)}" data-briefing-time="${escapeHtml(briefing.id)}"></label>
+    <div class="briefing-source-list">
+      ${DAILY_BRIEFING_SOURCE_OPTIONS.map((source) => `<button type="button" class="${sources.has(source) ? "active" : ""}" data-briefing-source="${escapeHtml(source)}" data-briefing-id="${escapeHtml(briefing.id)}">${escapeHtml(source)}</button>`).join("")}
+    </div>
+    <footer><span>${briefing.delivery?.includes("printer") ? "应用 + 打印机" : "仅应用"}</span><button type="button" data-briefing-preview="${escapeHtml(briefing.id)}">${icon("printer", 14)}打印一次</button></footer>
+  </article>`;
+}
+
 async function homeView() {
-  const data = await api.dashboard();
+  const [data, briefings] = await Promise.all([api.dashboard(), api.dailyBriefings()]);
   const companion = companionStore.getState();
   const openTasks = companion.tasks.filter((task) => !task.done).length;
   return `<section class="page home-page" id="home-view">
@@ -322,6 +338,8 @@ async function homeView() {
         <div class="mini-user-list">${data.matches.map((item) => miniUser(item, false)).join("")}</div>
         <div class="section-head compact"><div><p class="eyebrow">YOUR HARDWARE</p><h2>桌面设备</h2></div><button data-nav="/device">管理</button></div>
         ${deviceMini(data.device)}
+        <div class="section-head compact"><div><p class="eyebrow">AUTO PUSH</p><h2>每日自动推送</h2></div><button data-nav="/device">设备</button></div>
+        <div class="daily-briefing-list">${briefings.items.map(dailyBriefingCard).join("")}</div>
       </aside>
     </div>
   </section>`;
@@ -1691,6 +1709,38 @@ function wire() {
     if (!ui.fortuneResult) return;
     stagePrintable("note", ui.fortuneResult.title, `${ui.fortuneResult.reading}\n\n${ui.fortuneResult.disclaimer}`, {}, "趣味小卡已经排好版，请确认后打印。");
   });
+  document.querySelectorAll("[data-briefing-toggle]").forEach((element) => element.addEventListener("click", async () => {
+    try {
+      const enabled = element.dataset.enabled !== "true";
+      await api.updateDailyBriefing(element.dataset.briefingToggle, { enabled });
+      toast(enabled ? "每日推送已开启" : "每日推送已暂停", "success");
+      render();
+    } catch (error) { toast(error.message, "error"); }
+  }));
+  document.querySelectorAll("[data-briefing-time]").forEach((element) => element.addEventListener("change", async () => {
+    try {
+      await api.updateDailyBriefing(element.dataset.briefingTime, { time: element.value });
+      toast("推送时间已更新", "success");
+      render();
+    } catch (error) { toast(error.message, "error"); }
+  }));
+  document.querySelectorAll("[data-briefing-source]").forEach((element) => element.addEventListener("click", async () => {
+    try {
+      const data = await api.dailyBriefings();
+      const briefing = data.items.find((item) => item.id === element.dataset.briefingId);
+      const next = new Set(briefing?.sources ?? []);
+      if (next.has(element.dataset.briefingSource)) next.delete(element.dataset.briefingSource);
+      else next.add(element.dataset.briefingSource);
+      await api.updateDailyBriefing(element.dataset.briefingId, { sources: [...next] });
+      render();
+    } catch (error) { toast(error.message, "error"); }
+  }));
+  document.querySelectorAll("[data-briefing-preview]").forEach((element) => element.addEventListener("click", async () => {
+    try {
+      const result = await api.previewDailyBriefing(element.dataset.briefingPreview);
+      stagePrintable(result.printable.kind, result.printable.title, result.printable.content, {}, "每日推送内容已整理为 384px 热敏纸版本，请确认后打印。");
+    } catch (error) { toast(error.message, "error"); }
+  }));
 
   document.querySelectorAll("[data-write-to]").forEach((element) => element.addEventListener("click", () => {
     sessionStorage.setItem("aihub-recipient", element.dataset.writeTo);

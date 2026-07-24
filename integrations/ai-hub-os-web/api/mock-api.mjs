@@ -194,6 +194,33 @@ const printJobs = [
   }
 ];
 
+const dailyBriefings = [
+  {
+    id: "brief-ai-morning",
+    title: "AI 早报",
+    category: "news",
+    enabled: true,
+    time: "08:00",
+    sources: ["AI新闻", "科技产品", "开源项目"],
+    delivery: ["app", "printer"],
+    lastRunAt: "2026-07-24T00:00:00.000Z",
+    nextRunAt: "2026-07-25T00:00:00.000Z",
+    version: 1
+  },
+  {
+    id: "brief-market-noon",
+    title: "午间市场观察",
+    category: "finance",
+    enabled: false,
+    time: "12:30",
+    sources: ["财经", "美股", "汇率"],
+    delivery: ["app"],
+    lastRunAt: null,
+    nextRunAt: "2026-07-25T04:30:00.000Z",
+    version: 1
+  }
+];
+
 const comments = {
   "post-1": [
     { id: "comment-1", authorId: "usr-lin", content: "这个晨间纸条的节制感很喜欢。打印资源是服务端渲染吗？", createdAt: "2026-07-23T07:10:00.000Z" },
@@ -586,8 +613,34 @@ function requireIdempotency(request, operation, body) {
   };
 }
 
+function dailyBriefingContent(briefing) {
+  const date = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", weekday: "short" }).format(new Date());
+  if (briefing.category === "finance") {
+    return [
+      `${briefing.title} · ${date}`,
+      `推送时间 ${briefing.time}`,
+      "",
+      "1. 今日先关注主要指数开盘情绪，不追涨。",
+      "2. 汇率和利率消息可能影响科技股波动。",
+      "3. 如果要记录投资想法，先写下原因和风险。",
+      "",
+      "仅作信息整理，不构成投资建议。"
+    ].join("\n");
+  }
+  return [
+    `${briefing.title} · ${date}`,
+    `推送时间 ${briefing.time}`,
+    "",
+    "1. 端侧 AI 和小型硬件仍是今天的热门方向。",
+    "2. 一个值得关注的开源项目：本地知识库 + Agent 工作流。",
+    "3. 今日灵感：把复杂信息整理成一张能打印的小纸条。",
+    "",
+    "MIMO 已为你压缩成热敏纸阅读版。"
+  ].join("\n");
+}
+
 export function getMockState() {
-  return { me, users, posts, matches, letters, device, printJobs, comments };
+  return { me, users, posts, matches, letters, device, printJobs, comments, dailyBriefings };
 }
 
 export async function handleApiRequest(request, response, requestId) {
@@ -603,6 +656,7 @@ export async function handleApiRequest(request, response, requestId) {
         user: me,
         featuredPosts: posts.slice(0, 3).map(hydratePost),
         matches: matches.slice(0, 2).map((item) => ({ ...item, user: withUser(users.find((user) => user.id === item.userId)) })),
+        dailyBriefings: dailyBriefings.slice(0, 2),
         unreadLetters: letters.filter((letter) => letter.recipientId === me.id && letter.unread).length,
         waitingPrintJobs: printJobs.filter((job) => !["SUCCESS", "CANCELLED"].includes(job.status)).length,
         device
@@ -762,6 +816,49 @@ export async function handleApiRequest(request, response, requestId) {
         if (body.action === "FOLLOWED") match.followed = true;
         send(response, 204, null, requestId);
       }
+      return true;
+    }
+
+    if (method === "GET" && path === "/daily-briefings") {
+      send(response, 200, page(dailyBriefings), requestId);
+      return true;
+    }
+
+    const dailyBriefingMatch = path.match(/^\/daily-briefings\/([^/]+)$/);
+    if (method === "PUT" && dailyBriefingMatch) {
+      const body = await readJson(request);
+      const briefing = dailyBriefings.find((item) => item.id === dailyBriefingMatch[1]);
+      if (!briefing) {
+        const issue = problem(404, "DAILY_BRIEFING_NOT_FOUND", "Daily briefing not found", "This automation does not exist.", requestId);
+        send(response, issue.status, issue.body, requestId);
+        return true;
+      }
+      if (typeof body.enabled === "boolean") briefing.enabled = body.enabled;
+      if (/^\d{2}:\d{2}$/.test(String(body.time ?? ""))) briefing.time = String(body.time);
+      if (Array.isArray(body.sources)) briefing.sources = body.sources.map((item) => String(item).slice(0, 24)).filter(Boolean).slice(0, 8);
+      if (Array.isArray(body.delivery)) briefing.delivery = body.delivery.filter((item) => ["app", "printer"].includes(item)).slice(0, 2);
+      briefing.version += 1;
+      send(response, 200, briefing, requestId, { ETag: `"${briefing.version}"` });
+      return true;
+    }
+
+    const dailyBriefingPreviewMatch = path.match(/^\/daily-briefings\/([^/]+)\/preview$/);
+    if (method === "POST" && dailyBriefingPreviewMatch) {
+      const briefing = dailyBriefings.find((item) => item.id === dailyBriefingPreviewMatch[1]);
+      if (!briefing) {
+        const issue = problem(404, "DAILY_BRIEFING_NOT_FOUND", "Daily briefing not found", "This automation does not exist.", requestId);
+        send(response, issue.status, issue.body, requestId);
+        return true;
+      }
+      send(response, 200, {
+        briefing,
+        printable: {
+          kind: "note",
+          title: briefing.title,
+          content: dailyBriefingContent(briefing)
+        },
+        requestId
+      }, requestId);
       return true;
     }
 
