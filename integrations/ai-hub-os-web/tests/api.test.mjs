@@ -174,6 +174,42 @@ test("companion learning, play and life endpoints are interactive", async () => 
   });
 });
 
+test("photo uploads create thermal album assets usable by Letters", async () => {
+  await withApi(async (baseUrl) => {
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=", "base64");
+    const form = new FormData();
+    form.set("source", "upload");
+    form.set("purpose", "letter");
+    form.set("title", "手机相册照片");
+    form.set("image", new Blob([png], { type: "image/png" }), "memory.png");
+    const uploadedResponse = await fetch(`${baseUrl}/photos`, {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: form
+    });
+    const uploaded = await uploadedResponse.json();
+    assert.equal(uploadedResponse.status, 201);
+    assert.equal(uploaded.photo.purpose, "letter");
+    assert.equal(uploaded.photo.processed.profile, "letter");
+    assert.match(uploaded.photo.processed.previewDataUrl, /^data:image\/png;base64,/);
+
+    const album = await fetch(`${baseUrl}/photos`).then((response) => response.json());
+    assert.ok(album.items.some((item) => item.id === uploaded.photo.id));
+
+    const draft = await fetch(`${baseUrl}/letters`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({
+        recipientId: "usr-aiko",
+        subject: "带照片的信",
+        body: "这是一封带照片的信。",
+        assetIds: [uploaded.photo.id]
+      })
+    }).then((response) => response.json());
+    assert.equal(draft.assets[0].id, uploaded.photo.id);
+  });
+});
+
 test("AI orchestrator requires confirmation before every print action", async () => {
   await withApi(async (baseUrl) => {
     const staged = await fetch(`${baseUrl}/ai/orchestrate`, {

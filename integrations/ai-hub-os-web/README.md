@@ -27,6 +27,9 @@ npm run dev
 - `POST /api/v1/ai/tutor`
 - `POST /api/v1/games/turtle-soup/answer`
 - `POST /api/v1/ai/ocr`
+- `GET /api/v1/photos`
+- `POST /api/v1/photos`
+- `POST /api/v1/photos/hardware`
 - `POST /api/v1/ai/journal/summary`
 - `POST /api/v1/ai/fortune`
 - `GET/POST /api/v1/posts`
@@ -52,3 +55,5 @@ npm run dev
 
 当前 Repository 为进程内存实现，API Client、状态和错误契约可在接 PostgreSQL 后保持不变。
 网页端语音只使用浏览器内置 Web Speech API；硬件侧只接收后端转发的打印任务。
+拍照动作由硬件端自己完成，完成后将 JPEG/PNG 以 multipart `image` 字段上传到
+`POST /api/v1/photos/hardware`，应用端只负责相册展示、热敏像素化和 Letter 附图打印。

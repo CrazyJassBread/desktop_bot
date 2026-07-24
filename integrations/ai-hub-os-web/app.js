@@ -39,6 +39,7 @@ const ui = {
   photoPreview: null,
   photoFileName: null,
   photoResult: null,
+  letterAttachment: null,
   fortuneResult: null,
   journalSummary: "",
   aiProvider: "checking",
@@ -639,6 +640,7 @@ function letterCard(letter) {
 
 function letterDetail(letter) {
   if (!letter) return `<div class="letter-detail-empty"><span>${icon("letter", 28)}</span><h3>选择一封信</h3><p>数字送达与实体打印状态会显示在这里。</p></div>`;
+  const assets = Array.isArray(letter.assets) ? letter.assets : [];
   const steps = [
     ["SENT", "已发送", true],
     ["RECEIVED", "数字送达", ["RECEIVED", "PRINTING", "PRINTED"].includes(letter.status)],
@@ -648,7 +650,7 @@ function letterDetail(letter) {
   return `<article class="letter-detail">
     <header><div>${avatar(letter.counterpart, "large")}<span><p class="eyebrow">${letter.direction === "sent" ? "TO" : "FROM"}</p><h2>${escapeHtml(letter.counterpart.displayName)}</h2><small>${escapeHtml(letter.counterpart.city)}, ${escapeHtml(letter.counterpart.country)}</small></span></div><button class="round-button">${icon("more", 18)}</button></header>
     <div class="delivery-timeline">${steps.map(([key, label, done], index) => `<span class="${done ? "done" : ""}"><i>${done ? icon("check", 12) : index + 1}</i><small>${label}</small></span>${index < 3 ? "<b></b>" : ""}`).join("")}</div>
-    <div class="letter-paper"><span class="letter-paper-head">AI HUB LETTER / ${new Date(letter.createdAt).toLocaleDateString("zh-CN")}</span><h1>${escapeHtml(letter.subject)}</h1><pre>${escapeHtml(letter.body)}</pre><span class="paper-end">· · · · · · · · · · ·</span></div>
+    <div class="letter-paper"><span class="letter-paper-head">AI HUB LETTER / ${new Date(letter.createdAt).toLocaleDateString("zh-CN")}</span><h1>${escapeHtml(letter.subject)}</h1>${assets[0] ? `<img class="letter-paper-photo" src="${assets[0].processed.previewDataUrl}" alt="Letter 附图热敏预览">` : ""}<pre>${escapeHtml(letter.body)}</pre><span class="paper-end">· · · · · · · · · · ·</span></div>
     <footer><button class="outline-button" data-report-letter="${letter.id}">${icon("flag", 15)}举报</button><div><button class="outline-button" data-reply-letter="${letter.counterpart.id}">回复</button>${letter.printJob && letter.printJob.status !== "SUCCESS" ? `<button class="primary-button" data-print-letter="${letter.id}" data-print-job="${letter.printJob.id}">${icon("printer", 16)}发送到设备</button>` : ""}</div></footer>
   </article>`;
 }
@@ -678,7 +680,13 @@ async function letterCreateView() {
     body: "信件内容会在这里预览。\n写下想被认真保存的一段话。",
     sender: "林安",
     recipient: recipient.displayName,
-    letterId: "PREVIEW"
+    letterId: "PREVIEW",
+    ...(ui.letterAttachment ? {
+      attachmentImageDataUrl: ui.letterAttachment.processed.previewDataUrl,
+      attachmentWidth: ui.letterAttachment.processed.width,
+      attachmentHeight: ui.letterAttachment.processed.height,
+      attachmentCaption: ui.letterAttachment.title
+    } : {})
   });
   return `<section class="page letter-compose-page" id="letter-create-view">
     ${pageHead("WRITE SLOWLY", "写一封信", "AI 可以帮助组织表达，但事实、语气与发送决定都属于你。")}
@@ -690,6 +698,11 @@ async function letterCreateView() {
         </div>
         <label>主题<input name="subject" maxlength="200" placeholder="例如：夏夜与最近的生活" required></label>
         <label>正文<textarea name="body" rows="13" placeholder="见字如面……" required></textarea></label>
+        <div class="letter-photo-uploader">
+          <div><p class="eyebrow">PHOTO ATTACHMENT</p><strong>附上一张热敏像素照片</strong><span>手机端也可以直接从相册上传；系统会自动裁到适合 58mm 热敏纸的尺寸。</span></div>
+          <label class="outline-button">${icon("camera", 15)}上传照片<input id="letter-photo-input" type="file" accept="image/*"></label>
+          <div id="letter-photo-preview">${ui.letterAttachment ? `<figure><img src="${ui.letterAttachment.processed.previewDataUrl}" alt="信件附图热敏预览"><figcaption>${escapeHtml(ui.letterAttachment.title)} · ${ui.letterAttachment.processed.width}×${ui.letterAttachment.processed.height}</figcaption><button type="button" class="text-button" data-remove-letter-photo>移除照片</button></figure>` : '<small>尚未添加照片。</small>'}</div>
+        </div>
         <div class="ai-toolbar"><span>${icon("spark", 17)}AI 辅助</span><button type="button" data-ai-letter="generate">生成草稿</button><button type="button" data-ai-letter="polish">温和润色</button></div>
         <div class="privacy-hint">${icon("shield", 17)}发送前会再次确认收件人。手机号、地址和其他敏感内容不会被公开。</div>
         <div class="letter-editor-footer"><button class="ghost-button" type="submit" name="intent" value="draft">保存草稿</button><button class="primary-button" type="submit" name="intent" value="send">确认并发送 ${icon("arrow", 16)}</button></div>
@@ -794,8 +807,16 @@ async function deviceView() {
   </section>`;
 }
 
+function memoryPhotoCard(photo) {
+  const sourceLabel = photo.source === "hardware" ? "硬件自动上传" : "相册上传";
+  return `<article class="memory-photo-card">
+    <img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 的热敏像素预览">
+    <div><strong>${escapeHtml(photo.title)}</strong><span>${sourceLabel} · ${formatTime(photo.createdAt)}</span><small>${photo.processed.width}×${photo.processed.height} · ${escapeHtml(photo.processed.processor)}</small></div>
+  </article>`;
+}
+
 async function profileView() {
-  const [user, postData] = await Promise.all([api.me(), api.posts({ query: "" })]);
+  const [user, postData, photos] = await Promise.all([api.me(), api.posts({ query: "" }), api.photos()]);
   const ownPosts = postData.items.filter((post) => post.author.id === user.id);
   return `<section class="page profile-page" id="profile-view">
     <article class="profile-hero">
@@ -809,7 +830,14 @@ async function profileView() {
         <article class="profile-info-card"><p class="eyebrow">INTERESTS</p><h3>兴趣</h3>${tagList(user.interests, 8)}<p class="eyebrow spaced">SKILLS</p><h3>技能</h3>${tagList(user.skills, 8)}</article>
         <article class="profile-device-card">${deviceMini({ id: "mimo-desk-01", displayName: "MIMO One", model: "DNESP32S3", status: "ONLINE", firmwareVersion: "0.3.0", battery: 82, printer: { status: "READY" } })}<p>${icon("shield", 15)}只公开设备型号，不公开设备 ID 和在线地址。</p></article>
       </aside>
-      <main><div class="profile-tabs"><button class="active">发布</button><button>项目</button><button>Agent</button><button>Letter 分享</button></div>${ownPosts.map((post) => postCard(post)).join("")}<div class="profile-empty"><span>更多作品正在路上。</span></div></main>
+      <main>
+        <article class="memory-album">
+          <div class="card-head"><div><p class="eyebrow">MEMORY ALBUM</p><h2>回忆相册</h2></div><label class="outline-button">${icon("camera", 15)}从相册上传<input id="memory-photo-input" type="file" accept="image/*"></label></div>
+          <p class="policy-note">${icon("shield", 16)}网页不负责控制硬件拍照。你直接和硬件交互完成拍照后，设备会上传到 <code>POST /api/v1/photos/hardware</code> 并自动出现在这里。</p>
+          <div class="memory-photo-grid">${photos.items.map(memoryPhotoCard).join("")}</div>
+        </article>
+        <div class="profile-tabs"><button class="active">发布</button><button>项目</button><button>Agent</button><button>Letter 分享</button></div>${ownPosts.map((post) => postCard(post)).join("")}<div class="profile-empty"><span>更多作品正在路上。</span></div>
+      </main>
     </div>
   </section>`;
 }
@@ -924,7 +952,13 @@ function previewLetter(form) {
         body: form.querySelector('[name="body"]')?.value || "信件内容会在这里预览。",
         sender: "林安",
         recipient,
-        letterId: "PREVIEW"
+        letterId: "PREVIEW",
+        ...(ui.letterAttachment ? {
+          attachmentImageDataUrl: ui.letterAttachment.processed.previewDataUrl,
+          attachmentWidth: ui.letterAttachment.processed.width,
+          attachmentHeight: ui.letterAttachment.processed.height,
+          attachmentCaption: ui.letterAttachment.title
+        } : {})
       });
       image.src = preview.previewDataUrl;
       const estimate = document.querySelector("#letter-page-estimate");
@@ -972,6 +1006,19 @@ function syncLetterRecipient(form) {
   previewLetter(form);
 }
 
+function updateLetterAttachmentPreview(form) {
+  const wrap = document.querySelector("#letter-photo-preview");
+  if (!wrap) return;
+  wrap.innerHTML = ui.letterAttachment
+    ? `<figure><img src="${ui.letterAttachment.processed.previewDataUrl}" alt="信件附图热敏预览"><figcaption>${escapeHtml(ui.letterAttachment.title)} · ${ui.letterAttachment.processed.width}×${ui.letterAttachment.processed.height}</figcaption><button type="button" class="text-button" data-remove-letter-photo>移除照片</button></figure>`
+    : "<small>尚未添加照片。</small>";
+  wrap.querySelector("[data-remove-letter-photo]")?.addEventListener("click", () => {
+    ui.letterAttachment = null;
+    updateLetterAttachmentPreview(form);
+    previewLetter(form);
+  });
+}
+
 async function createAndMaybeSendLetter(form, intent) {
   const values = Object.fromEntries(new FormData(form));
   const recipientName = form.querySelector('[name="recipientId"] option:checked')?.textContent?.split(" · ")[0] ?? "AI Hub Friend";
@@ -980,7 +1027,7 @@ async function createAndMaybeSendLetter(form, intent) {
     subject: values.subject,
     body: values.body,
     sourceLanguage: "zh-CN",
-    assetIds: [],
+    assetIds: ui.letterAttachment ? [ui.letterAttachment.id] : [],
     templateId: "warm-mono"
   });
   if (intent === "draft") {
@@ -997,7 +1044,8 @@ async function createAndMaybeSendLetter(form, intent) {
         id: result.letterId,
         subject: values.subject,
         body: values.body,
-        recipientName
+        recipientName,
+        attachment: ui.letterAttachment
       }, result.printJob.id)
       .then((printResult) => {
         toast(`实体信件打印完成 · ${printResult.batchCount} 页`, "success");
@@ -1029,6 +1077,12 @@ async function printLetterToDevice(letter, printJobId) {
       recipient: letter.recipientName ?? letter.recipient?.displayName ?? "AI Hub Friend",
       date: new Date().toISOString().slice(0, 10),
       letterId: letter.id,
+      ...(letter.attachment ? {
+        attachmentImageDataUrl: letter.attachment.processed.previewDataUrl,
+        attachmentWidth: letter.attachment.processed.width,
+        attachmentHeight: letter.attachment.processed.height,
+        attachmentCaption: letter.attachment.title
+      } : {}),
       jobId: printJobId,
       source: "letter"
     });
@@ -1682,6 +1736,17 @@ function wire() {
     toast("已减少类似推荐");
     render();
   }));
+  document.querySelector("#memory-photo-input")?.addEventListener("change", async (event) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    try {
+      await api.uploadPhoto(file, { source: "upload", purpose: "memory", title: file.name });
+      toast("照片已加入回忆相册，并自动生成热敏像素版本", "success");
+      render();
+    } catch (error) {
+      toast(`上传失败：${error.message}`, "error");
+    }
+  });
 
   document.querySelectorAll("[data-letter-box]").forEach((element) => element.addEventListener("click", () => {
     ui.letterBox = element.dataset.letterBox;
@@ -1702,6 +1767,22 @@ function wire() {
   const letterForm = document.querySelector("#letter-form");
   letterForm?.addEventListener("input", () => previewLetter(letterForm));
   letterForm?.querySelector('[name="recipientId"]')?.addEventListener("change", () => syncLetterRecipient(letterForm));
+  updateLetterAttachmentPreview(letterForm);
+  document.querySelector("#letter-photo-input")?.addEventListener("change", async (event) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file || !letterForm) return;
+    try {
+      const result = await api.uploadPhoto(file, { source: "upload", purpose: "letter", title: file.name });
+      ui.letterAttachment = result.photo;
+      updateLetterAttachmentPreview(letterForm);
+      previewLetter(letterForm);
+      toast("照片已处理成热敏像素风格", "success");
+    } catch (error) {
+      toast(`照片处理失败：${error.message}`, "error");
+    } finally {
+      event.currentTarget.value = "";
+    }
+  });
   document.querySelectorAll("[data-ai-letter]").forEach((element) => element.addEventListener("click", () => aiLetterAction(element.dataset.aiLetter)));
   letterForm?.addEventListener("submit", async (event) => {
     event.preventDefault();

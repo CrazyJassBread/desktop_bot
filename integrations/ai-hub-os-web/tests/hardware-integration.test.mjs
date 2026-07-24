@@ -16,6 +16,7 @@ import {
   THERMAL_CONTENT_MAX_HEIGHT,
   THERMAL_CONTENT_WIDTH
 } from "../services/thermal-content.mjs";
+import { processThermalImage } from "../services/thermal-image.mjs";
 
 test("thermal Letter uses the 384px hardware contract and packs one bit per pixel", async () => {
   const input = {
@@ -78,6 +79,29 @@ test("chat, todo and word content share safe 384px thermal pagination", async ()
     assert.ok(rendered.batches.every((batch) => batch.height <= THERMAL_CONTENT_MAX_HEIGHT));
     assert.ok(rendered.batches.every((batch) => batch.bitmap.length === 48 * batch.height));
   }
+});
+
+test("Letter photos are processed as bounded thermal pixel attachments", async () => {
+  const source = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420"><rect width="640" height="420" fill="white"/><circle cx="210" cy="150" r="90" fill="black"/><path d="M80 340h480" stroke="black" stroke-width="40"/></svg>`);
+  const photo = await processThermalImage(source, { profile: "letter" });
+  assert.equal(photo.profile, "letter");
+  assert.ok(photo.width <= 300);
+  assert.ok(photo.height <= 150);
+  assert.match(photo.previewDataUrl, /^data:image\/png;base64,/);
+
+  const rendered = await renderThermalLetterBatches({
+    subject: "带照片的信",
+    body: "这是一封带有热敏像素照片的信。照片应该固定适配 58mm 热敏纸，不把单页撑爆。",
+    sender: "林安",
+    recipient: "Aiko",
+    letterId: "photo-letter",
+    attachmentImageDataUrl: photo.previewDataUrl,
+    attachmentWidth: photo.width,
+    attachmentHeight: photo.height,
+    attachmentCaption: "MEMORY PHOTO"
+  }, { rotate180: false });
+  assert.ok(rendered.batches.every((batch) => batch.width === 384));
+  assert.ok(rendered.batches.every((batch) => batch.height <= THERMAL_BATCH_MAX_HEIGHT));
 });
 
 test("Letter printer feeds, sends bounded batches and replays idempotently", async () => {

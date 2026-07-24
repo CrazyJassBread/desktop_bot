@@ -149,16 +149,15 @@ powershell -ExecutionPolicy Bypass -File scripts/watch_mic_transcripts.ps1
 
 如需统一修改硬件端口：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/set_hardware_ports.ps1 -AudioPort 8081 -VisionPort 8082
-```
-
 当前保留端口：
 
 - `8081`：ESP32-S3 麦克风 TCP PCM；
 - `8082`：ESP32-S3 图像 HTTP 上传；
 - `8090`：desktop_bot HTTP/WebSocket API；
 - `18000`：AI Hub OS Web MVP。
+
+说明：`integrations/ai-hub-os-web` 当前只把硬件作为“打印机输出”和“照片上传来源”使用。
+Web 端语音使用浏览器内置 Web Speech API；Web 不再接入 desktop_bot 的板载麦克风 ASR/手势事件桥。
 
 启动 Web MVP：
 
@@ -171,9 +170,19 @@ npm run dev
 
 页面地址：
 
-- `http://127.0.0.1:18000/education`：本地电脑麦克风、学习 AI 和可打印内容；
-- `http://127.0.0.1:18000/letter/create`：写信、预览 384 px 热敏模板、发送打印；
-- `http://127.0.0.1:18000/device`：设备状态、打印测试、desktop_bot 感知事件。
+- `http://127.0.0.1:18000/education`：浏览器麦克风、学习 AI 和可打印内容；
+- `http://127.0.0.1:18000/letter/create`：写信、上传照片、预览 384 px 热敏模板、发送打印；
+- `http://127.0.0.1:18000/profile`：个人主页和回忆相册，硬件拍摄照片会自动上传到这里；
+- `http://127.0.0.1:18000/device`：设备状态、打印测试和 Web→ESP32 打印链路说明。
+
+硬件端拍照完成后可直接上传到 Web：
+
+```http
+POST http://127.0.0.1:18000/api/v1/photos/hardware
+Content-Type: multipart/form-data
+
+image=<JPEG/PNG/WebP file>
+```
 
 ## 配置
 

@@ -1,4 +1,5 @@
 import iconv from "iconv-lite";
+import { Readable } from "node:stream";
 import {
   renderThermalLetterBatches,
   thermalLetterPreviewDataUrl
@@ -9,6 +10,7 @@ import {
   renderThermalContentBatches,
   thermalContentPreviewDataUrl
 } from "../services/thermal-content.mjs";
+import { processThermalImage } from "../services/thermal-image.mjs";
 
 const me = {
   id: "usr-lin",
@@ -201,6 +203,47 @@ const comments = {
 
 const idempotency = new Map();
 
+function svgDataUrl(svg) {
+  return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
+}
+
+const photoAssets = [
+  {
+    id: "photo-hw-1",
+    userId: me.id,
+    title: "桌边的第一张热敏照片",
+    source: "hardware",
+    purpose: "memory",
+    createdAt: "2026-07-24T08:30:00.000Z",
+    originalName: "device-capture-001.jpg",
+    processed: {
+      profile: "album",
+      width: 320,
+      height: 205,
+      mimeType: "image/svg+xml",
+      processor: "thermal-placeholder-v1",
+      previewDataUrl: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="205" viewBox="0 0 320 205"><rect width="320" height="205" fill="#fff"/><path d="M0 0h320v205H0z" fill="none" stroke="#000" stroke-width="6"/><path d="M22 142 86 83l47 38 42-53 123 94" fill="none" stroke="#000" stroke-width="9" stroke-linejoin="round"/><circle cx="238" cy="54" r="22" fill="#000"/><g opacity=".25">${Array.from({ length: 32 }, (_, index) => `<path d="M${index * 10} 0v205" stroke="#000"/>`).join("")}</g></svg>`)
+    }
+  },
+  {
+    id: "photo-user-1",
+    userId: me.id,
+    title: "清迈手帐页",
+    source: "upload",
+    purpose: "memory",
+    createdAt: "2026-07-23T12:10:00.000Z",
+    originalName: "memory-note.png",
+    processed: {
+      profile: "album",
+      width: 320,
+      height: 205,
+      mimeType: "image/svg+xml",
+      processor: "thermal-placeholder-v1",
+      previewDataUrl: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" width="320" height="205" viewBox="0 0 320 205"><rect width="320" height="205" fill="#fff"/><rect x="14" y="14" width="292" height="177" rx="12" fill="none" stroke="#000" stroke-width="5" stroke-dasharray="8 8"/><text x="160" y="80" text-anchor="middle" font-family="Arial" font-size="26" font-weight="900">MEMORY</text><text x="160" y="116" text-anchor="middle" font-family="Arial" font-size="18" font-weight="700">THERMAL PHOTO</text><path d="M75 150h170" stroke="#000" stroke-width="6"/></svg>`)
+    }
+  }
+];
+
 function withUser(user) {
   return { ...user, relationship: user.id === "usr-chen" ? "FOLLOWING" : "NONE" };
 }
@@ -224,11 +267,15 @@ function hydratePost(post) {
 function hydrateLetter(letter) {
   const counterpartId = letter.authorId === me.id ? letter.recipientId : letter.authorId;
   const job = printJobs.find((item) => item.letterId === letter.id);
+  const assets = Array.isArray(letter.assetIds)
+    ? letter.assetIds.map((id) => photoAssets.find((asset) => asset.id === id)).filter(Boolean)
+    : [];
   return {
     ...letter,
     counterpart: withUser(users.find((user) => user.id === counterpartId)),
     direction: letter.authorId === me.id ? "sent" : "received",
-    printJob: job ?? null
+    printJob: job ?? null,
+    assets
   };
 }
 
@@ -257,6 +304,16 @@ async function readJson(request) {
   }
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function readMultipart(request) {
+  const webRequest = new Request(`http://127.0.0.1${request.url}`, {
+    method: request.method,
+    headers: request.headers,
+    body: Readable.toWeb(request),
+    duplex: "half"
+  });
+  return webRequest.formData();
 }
 
 function page(items) {
@@ -812,6 +869,59 @@ export async function handleApiRequest(request, response, requestId) {
       return true;
     }
 
+    if (method === "GET" && path === "/photos") {
+      const purpose = String(url.searchParams.get("purpose") ?? "").trim();
+      const items = photoAssets
+        .filter((asset) => asset.userId === me.id)
+        .filter((asset) => !purpose || asset.purpose === purpose)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      send(response, 200, page(items), requestId);
+      return true;
+    }
+
+    if (method === "POST" && (path === "/photos" || path === "/photos/hardware")) {
+      try {
+        const form = await readMultipart(request);
+        const file = form.get("image");
+        if (!file || typeof file.arrayBuffer !== "function") {
+          const issue = problem(422, "PHOTO_IMAGE_REQUIRED", "Photo image is required", "Upload an image file using multipart field `image`.", requestId);
+          send(response, issue.status, issue.body, requestId);
+          return true;
+        }
+        const contentType = String(file.type || "image/jpeg").toLowerCase();
+        if (!["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(contentType)) {
+          const issue = problem(415, "PHOTO_TYPE_UNSUPPORTED", "Photo type is unsupported", "Use JPG, PNG or WebP for thermal processing.", requestId);
+          send(response, issue.status, issue.body, requestId);
+          return true;
+        }
+        const bytes = Buffer.from(await file.arrayBuffer());
+        if (!bytes.length || bytes.length > 4_194_304) {
+          const issue = problem(413, "PHOTO_TOO_LARGE", "Photo is too large", "The MVP accepts one photo up to 4 MiB.", requestId);
+          send(response, issue.status, issue.body, requestId);
+          return true;
+        }
+        const source = path === "/photos/hardware" ? "hardware" : String(form.get("source") ?? "upload").slice(0, 24);
+        const purpose = String(form.get("purpose") ?? "memory").slice(0, 24);
+        const processed = await processThermalImage(bytes, { profile: purpose === "letter" ? "letter" : "album" });
+        const photo = {
+          id: `photo-${crypto.randomUUID()}`,
+          userId: me.id,
+          title: String(form.get("title") ?? file.name ?? (source === "hardware" ? "设备拍摄照片" : "相册照片")).trim().slice(0, 80),
+          source,
+          purpose,
+          createdAt: new Date().toISOString(),
+          originalName: String(file.name ?? "photo").slice(0, 120),
+          processed
+        };
+        photoAssets.unshift(photo);
+        send(response, 201, { photo, requestId }, requestId);
+      } catch (error) {
+        const issue = problem(400, "PHOTO_PROCESS_FAILED", "Photo could not be processed", error.message, requestId);
+        send(response, issue.status, issue.body, requestId);
+      }
+      return true;
+    }
+
     if (method === "POST" && path === "/ai/journal/summary") {
       const body = await readJson(request);
       const journalBody = String(body.body ?? "").trim();
@@ -1205,6 +1315,7 @@ export async function handleApiRequest(request, response, requestId) {
       const letter = {
         id: `ltr-${crypto.randomUUID()}`, authorId: me.id, recipientId: recipient.id,
         subject: body.subject.trim(), body: body.body.trim(), status: "DRAFT", printStatus: null,
+        assetIds: Array.isArray(body.assetIds) ? body.assetIds.filter((id) => photoAssets.some((asset) => asset.id === id)).slice(0, 3) : [],
         createdAt: new Date().toISOString(), unread: false, version: 1
       };
       letters.unshift(letter);

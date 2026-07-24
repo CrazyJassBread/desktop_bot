@@ -15,7 +15,8 @@ function idempotencyKey() {
 async function request(path, options = {}) {
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
-  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+  if (options.body && !headers.has("Content-Type") && !isFormData) headers.set("Content-Type", "application/json");
   const response = await fetch(`/api/v1${path}`, {
     credentials: "same-origin",
     ...options,
@@ -106,6 +107,19 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ fileName })
   }),
+  photos: (purpose = "") => request(`/photos${purpose ? `?purpose=${encodeURIComponent(purpose)}` : ""}`),
+  uploadPhoto: (file, { source = "upload", purpose = "memory", title = "" } = {}) => {
+    const form = new FormData();
+    form.set("image", file);
+    form.set("source", source);
+    form.set("purpose", purpose);
+    if (title) form.set("title", title);
+    return request(source === "hardware" ? "/photos/hardware" : "/photos", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey() },
+      body: form
+    });
+  },
   journalSummary: (body) => request("/ai/journal/summary", {
     method: "POST",
     body: JSON.stringify({ body })

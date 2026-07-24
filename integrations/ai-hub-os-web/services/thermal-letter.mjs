@@ -61,6 +61,21 @@ function textRows(lines, startY, lineHeight, attributes = "") {
   )).join("");
 }
 
+function letterAttachment(input = {}) {
+  const dataUrl = String(input.attachmentImageDataUrl ?? input.attachment?.previewDataUrl ?? "").trim();
+  if (!dataUrl.startsWith("data:image/")) return null;
+  const width = Math.max(80, Math.min(300, Number(input.attachmentWidth ?? input.attachment?.width ?? 300) || 300));
+  const height = Math.max(60, Math.min(150, Number(input.attachmentHeight ?? input.attachment?.height ?? 150) || 150));
+  const x = Math.round((THERMAL_PRINTER_WIDTH - width) / 2);
+  return {
+    dataUrl,
+    width,
+    height,
+    x,
+    caption: String(input.attachmentCaption ?? input.attachment?.title ?? "MEMORY PHOTO").trim().slice(0, 42)
+  };
+}
+
 export function buildThermalLetterSvg(input = {}) {
   const subject = String(input.subject ?? "一封来自 AI Hub 的信").trim().slice(0, 120);
   const body = String(input.body ?? "").trim().slice(0, 3_000);
@@ -70,6 +85,7 @@ export function buildThermalLetterSvg(input = {}) {
   const letterId = String(input.letterId ?? "PREVIEW").replace(/[^a-zA-Z0-9_-]/g, "").slice(-10) || "PREVIEW";
   const pageIndex = Math.max(0, Number(input.pageIndex ?? 0) || 0);
   const pageCount = Math.max(1, Number(input.pageCount ?? 1) || 1);
+  const attachment = pageIndex === 0 ? letterAttachment(input) : null;
 
   const titleLines = wrapText(subject, 12.2, 2);
   const bodyLines = wrapText(body || "愿这张小小的纸，替我把此刻的心意送到你身边。", 16.2, MAX_BODY_LINES);
@@ -79,12 +95,20 @@ export function buildThermalLetterSvg(input = {}) {
   const titleStartY = 195;
   const titleLineHeight = 37;
   const metaY = titleStartY + titleLines.length * titleLineHeight + 7;
-  const bodyStartY = metaY + 96;
+  const attachmentBlockHeight = attachment ? attachment.height + 40 : 0;
+  const attachmentY = metaY + 78;
+  const bodyStartY = metaY + 96 + attachmentBlockHeight;
   const footerY = bodyStartY + bodyLines.length * BODY_LINE_HEIGHT + 38;
   const height = Math.max(620, footerY + 118);
 
   const titleSvg = textRows(titleLines, titleStartY, titleLineHeight, 'class="title"');
   const bodySvg = textRows(bodyLines, bodyStartY, BODY_LINE_HEIGHT, 'class="body"');
+  const attachmentSvg = attachment ? `
+    <g class="attachment">
+      <rect x="${attachment.x - 7}" y="${attachmentY - 7}" width="${attachment.width + 14}" height="${attachment.height + 14}" rx="6" fill="#fff" stroke="#000" stroke-width="1.5"/>
+      <image x="${attachment.x}" y="${attachmentY}" width="${attachment.width}" height="${attachment.height}" href="${escapeXml(attachment.dataUrl)}" preserveAspectRatio="xMidYMid meet"/>
+      <text x="192" y="${attachmentY + attachment.height + 27}" text-anchor="middle" class="caption">${escapeXml(attachment.caption)}</text>
+    </g>` : "";
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${THERMAL_PRINTER_WIDTH}" height="${height}" viewBox="0 0 ${THERMAL_PRINTER_WIDTH} ${height}">
     <rect width="100%" height="100%" fill="#fff"/>
@@ -92,7 +116,7 @@ export function buildThermalLetterSvg(input = {}) {
       text{fill:#000;font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC","Arial",sans-serif}
       .micro{font-size:10px;font-weight:700;letter-spacing:2px}.brand{font-size:27px;font-weight:900;letter-spacing:1px}
       .title{font-size:28px;font-weight:900}.body{font-size:${BODY_FONT_SIZE}px;font-weight:500}
-      .meta{font-size:13px;font-weight:700}.serial{font-size:15px;font-weight:900;letter-spacing:.7px}.footer{font-size:11px;font-weight:700;letter-spacing:1px}
+      .meta{font-size:13px;font-weight:700}.serial{font-size:15px;font-weight:900;letter-spacing:.7px}.footer{font-size:11px;font-weight:700;letter-spacing:1px}.caption{font-size:10px;font-weight:800;letter-spacing:1.3px}
     </style>
     <rect x="10" y="10" width="364" height="${height - 20}" rx="18" fill="none" stroke="#000" stroke-width="2"/>
     <rect x="18" y="18" width="348" height="${height - 36}" rx="13" fill="none" stroke="#000" stroke-width="1" stroke-dasharray="4 5"/>
@@ -106,6 +130,7 @@ export function buildThermalLetterSvg(input = {}) {
     <text x="26" y="${metaY + 35}" class="meta">TO  ${escapeXml(recipient)}</text>
     <text x="26" y="${metaY + 57}" class="meta">FROM  ${escapeXml(sender)}</text>
     <text x="358" y="${metaY + 57}" text-anchor="end" class="meta">${escapeXml(date)}</text>
+    ${attachmentSvg}
     ${bodySvg}
     <path d="M26 ${footerY} H358" stroke="#000" stroke-width="1"/>
     <circle cx="38" cy="${footerY + 31}" r="5" fill="#000"/><circle cx="55" cy="${footerY + 31}" r="5" fill="none" stroke="#000" stroke-width="2"/><circle cx="72" cy="${footerY + 31}" r="5" fill="#000"/>
@@ -153,7 +178,7 @@ export function paginateThermalLetter(input = {}) {
   const allLines = wrapText(rawBody || "愿这张小小的纸，替我把此刻的心意送到你身边。", 16.2, MAX_BODY_LINES);
   const bodyWasClipped = wrapText(rawBody, 16.2, MAX_BODY_LINES + 1).length > MAX_BODY_LINES;
   if (bodyWasClipped && allLines.length) allLines[allLines.length - 1] = `${allLines.at(-1).slice(0, -1)}…`;
-  const firstPageLineCount = 7;
+  const firstPageLineCount = letterAttachment(input) ? 3 : 7;
   const continuationLineCount = 14;
   const groups = [allLines.slice(0, firstPageLineCount)];
   for (let offset = firstPageLineCount; offset < allLines.length; offset += continuationLineCount) {
