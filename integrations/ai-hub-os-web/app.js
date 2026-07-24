@@ -602,11 +602,7 @@ function scoreRing(score) {
 async function matchView() {
   const data = await api.matches();
   return `<section class="page match-page" id="match-view">
-    ${pageHead("FIND YOUR PEOPLE", "遇见可能聊得来的人", "匹配来自共同兴趣、互补技能、语言与活跃度，不评价外貌。", `<button class="outline-button">${icon("settings", 16)}调整偏好</button>`)}
-    <div class="match-summary">
-      <div><span class="match-orbit"><i></i><i></i><b>4</b></span><p><strong>本周的新推荐</strong><small>规则版本 rules-2026-07</small></p></div>
-      <div class="formula"><span><b>40%</b>兴趣</span><i>+</i><span><b>30%</b>技能</span><i>+</i><span><b>20%</b>地区</span><i>+</i><span><b>10%</b>活跃度</span></div>
-    </div>
+    ${pageHead("FIND YOUR PEOPLE", "遇见可能聊得来的人", "看看今天想和谁写一封信。")}
     <div class="match-grid">
       ${data.items.map((match) => `<article class="match-card" data-match-card="${match.user.id}">
         <div class="match-card-art art-${match.user.id.split("-").at(-1)}"><span class="country-code">${match.user.countryCode}</span>${avatar(match.user, "hero")}<i></i><i></i></div>
@@ -614,12 +610,10 @@ async function matchView() {
           <div class="match-person"><div><h2>${escapeHtml(match.user.displayName)}</h2><p>@${escapeHtml(match.user.handle)} · ${escapeHtml(match.user.city)}, ${escapeHtml(match.user.country)}</p></div>${scoreRing(match.score)}</div>
           <p class="match-bio">${escapeHtml(match.user.bio)}</p>
           ${tagList(match.user.interests, 4)}
-          <div class="why-match"><p class="eyebrow">WHY YOU MATCH</p>${match.reasons.map((reason) => `<span>${icon("check", 13)}${escapeHtml(reason)}</span>`).join("")}</div>
           <div class="match-actions"><button class="primary-button" data-write-to="${match.user.id}">${icon("letter", 16)}写一封信</button><button class="outline-button" data-follow-user="${match.user.id}">${match.followed ? "已关注" : "关注"}</button><button class="round-button" data-pass-user="${match.user.id}" title="暂不感兴趣">${icon("close", 16)}</button></div>
         </div>
       </article>`).join("")}
     </div>
-    <div class="match-safety">${icon("shield", 20)}<p><strong>由你决定关系如何开始。</strong><br>陌生人的首封信只会作为请求送达，不会自动消耗对方设备的纸张。</p></div>
   </section>`;
 }
 
@@ -699,12 +693,10 @@ async function letterCreateView() {
         <label>主题<input name="subject" maxlength="200" placeholder="例如：夏夜与最近的生活" required></label>
         <label>正文<textarea name="body" rows="13" placeholder="见字如面……" required></textarea></label>
         <div class="letter-photo-uploader">
-          <div><p class="eyebrow">PHOTO ATTACHMENT</p><strong>附上一张热敏像素照片</strong><span>手机端也可以直接从相册上传；系统会自动裁到适合 58mm 热敏纸的尺寸。</span></div>
           <label class="outline-button">${icon("camera", 15)}上传照片<input id="letter-photo-input" type="file" accept="image/*"></label>
-          <div id="letter-photo-preview">${ui.letterAttachment ? `<figure><img src="${ui.letterAttachment.processed.previewDataUrl}" alt="信件附图热敏预览"><figcaption>${escapeHtml(ui.letterAttachment.title)} · ${ui.letterAttachment.processed.width}×${ui.letterAttachment.processed.height}</figcaption><button type="button" class="text-button" data-remove-letter-photo>移除照片</button></figure>` : '<small>尚未添加照片。</small>'}</div>
+          <div id="letter-photo-preview">${ui.letterAttachment ? `<figure><img src="${ui.letterAttachment.processed.previewDataUrl}" alt="信件附图热敏预览"><button type="button" class="text-button" data-remove-letter-photo>移除照片</button></figure>` : ""}</div>
         </div>
         <div class="ai-toolbar"><span>${icon("spark", 17)}AI 辅助</span><button type="button" data-ai-letter="generate">生成草稿</button><button type="button" data-ai-letter="polish">温和润色</button></div>
-        <div class="privacy-hint">${icon("shield", 17)}发送前会再次确认收件人。手机号、地址和其他敏感内容不会被公开。</div>
         <div class="letter-editor-footer"><button class="ghost-button" type="submit" name="intent" value="draft">保存草稿</button><button class="primary-button" type="submit" name="intent" value="send">确认并发送 ${icon("arrow", 16)}</button></div>
       </form>
       <aside class="paper-preview-panel">
@@ -738,54 +730,7 @@ async function deviceView() {
           <span>${icon("wifi", 20)}<i><strong>${escapeHtml(current.wifi)}</strong><small>${current.freshness}</small></i></span>
           <span>${icon("printer", 20)}<i><strong>${escapeHtml(current.printer.status)}</strong><small>纸张 ${escapeHtml(current.printer.paper)}</small></i></span>
         </div>
-        <div class="printer-safety"><span><i class="ready-dot"></i><strong>打印机可以接收任务</strong><small>${current.printer.temperatureC}°C · 58mm thermal</small></span><button class="primary-button" data-test-print>${icon("printer", 15)}测试打印</button></div>
-      </div>
-    </article>
-    <article class="printer-test-console">
-      <div class="card-head">
-        <div><p class="eyebrow">REAL DEVICE TEST · 10.76.7.129</p><h2>中英文打印测试</h2></div>
-        <span id="printer-test-result">等待发送</span>
-      </div>
-      <form id="printer-test-form">
-        <label class="printer-test-text">打印内容<textarea name="text" rows="4" maxlength="1000">A</textarea></label>
-        <div class="printer-test-controls">
-          <label>语言<select name="language"><option value="en" selected>English · JSON</option><option value="zh">中文 · GB2312</option></select></label>
-          <label>字体<select name="font"><option value="A" selected>Font A</option><option value="B">Font B</option></select></label>
-          <label>对齐<select name="align"><option value="left">左对齐</option><option value="center" selected>居中</option><option value="right">右对齐</option></select></label>
-          <label>宽度<select name="width"><option value="1" selected>1×</option><option value="2">2×</option></select></label>
-          <label>高度<select name="height"><option value="1" selected>1×</option><option value="2">2×</option></select></label>
-          <label>打印后走纸<select name="feedAfter"><option value="0">0 行</option><option value="2" selected>2 行</option><option value="3">3 行</option></select></label>
-        </div>
-        <div class="printer-test-footer">
-          <div class="printer-style-toggles">
-            <label><input type="checkbox" name="bold" checked>粗体</label>
-            <label><input type="checkbox" name="underline" checked>下划线</label>
-            <label><input type="checkbox" name="invert">反白</label>
-          </div>
-          <div class="printer-test-actions">
-            <button class="ghost-button" type="button" data-printer-sample="en">英文示例</button>
-            <button class="ghost-button" type="button" data-printer-sample="zh">中文示例</button>
-            <button class="primary-button" type="submit">${icon("printer", 15)}发送到打印机</button>
-          </div>
-        </div>
-      </form>
-      <p class="policy-note">${icon("shield", 16)}中文会由本地服务转换为 GB2312 二进制；英文使用 JSON。请求只从本机后端发送到局域网设备，不暴露设备 IP 给公网浏览器。</p>
-    </article>
-    <article class="printer-link-console">
-      <div class="card-head">
-        <div><p class="eyebrow">WEB VOICE · PRINTER ONLY</p><h2>网页语音与打印联动</h2></div>
-        <span class="link-state active">SIMPLIFIED</span>
-      </div>
-      <div class="printer-link-layout">
-        <div class="printer-link-channels">
-          <div><i class="live">${icon("mic", 18)}</i><span><strong>Browser Speech</strong><small>SpeechRecognition / webkitSpeechRecognition</small><b>WEB ONLY</b></span></div>
-          <div><i class="live">${icon("printer", 18)}</i><span><strong>ESP32 Printer</strong><small>POST /api/v1/printer/{text|content|letter}</small><b>HARDWARE OUTPUT</b></span></div>
-          <p>当前 Web 端不再接入板载麦克风 ASR、手势事件或摄像头回调。用户在浏览器里说话/输入后，后端调用 DeepSeek 做意图识别与整理；只有用户确认打印时，后端才把 384px 热敏位图或文本发送到 ESP32 打印机。</p>
-          <div class="bridge-contract"><span><b>VOICE</b><small>browser local input</small></span><span><b>AI</b><small>DeepSeek on server</small></span><span><b>PRINT</b><small>${escapeHtml(current.printer.status)} · ${escapeHtml(current.printer.paper)}</small></span></div>
-        </div>
-        <div class="printable-capability-feed"><div class="printable-capability-head"><strong>可打印能力</strong><span>384 px thermal</span></div>
-          ${["AI 对话回复", "今日计划 Todo", "单词学习卡片", "海龟汤故事", "Photo 2 Text 结果", "手帐总结", "趣味小卡", "AI Letter"].map((item) => `<div class="printable-capability"><i class="printable">${icon("printer", 15)}</i><span><strong>${item}</strong><small>生成预览后再确认打印，避免误出纸。</small></span><time>PRINT</time></div>`).join("")}
-        </div>
+        <div class="printer-safety"><span><i class="ready-dot"></i><strong>打印机可以接收任务</strong><small>${current.printer.temperatureC}°C · 58mm thermal</small></span></div>
       </div>
     </article>
     <div class="device-content-grid">
@@ -832,8 +777,7 @@ async function profileView() {
       </aside>
       <main>
         <article class="memory-album">
-          <div class="card-head"><div><p class="eyebrow">MEMORY ALBUM</p><h2>回忆相册</h2></div><label class="outline-button">${icon("camera", 15)}从相册上传<input id="memory-photo-input" type="file" accept="image/*"></label></div>
-          <p class="policy-note">${icon("shield", 16)}网页不负责控制硬件拍照。你直接和硬件交互完成拍照后，设备会上传到 <code>POST /api/v1/photos/hardware</code> 并自动出现在这里。</p>
+          <div class="card-head"><div><p class="eyebrow">MEMORY ALBUM</p><h2>回忆相册</h2></div><label class="outline-button">${icon("camera", 15)}上传照片<input id="memory-photo-input" type="file" accept="image/*"></label></div>
           <div class="memory-photo-grid">${photos.items.map(memoryPhotoCard).join("")}</div>
         </article>
         <div class="profile-tabs"><button class="active">发布</button><button>项目</button><button>Agent</button><button>Letter 分享</button></div>${ownPosts.map((post) => postCard(post)).join("")}<div class="profile-empty"><span>更多作品正在路上。</span></div>
@@ -1010,8 +954,8 @@ function updateLetterAttachmentPreview(form) {
   const wrap = document.querySelector("#letter-photo-preview");
   if (!wrap) return;
   wrap.innerHTML = ui.letterAttachment
-    ? `<figure><img src="${ui.letterAttachment.processed.previewDataUrl}" alt="信件附图热敏预览"><figcaption>${escapeHtml(ui.letterAttachment.title)} · ${ui.letterAttachment.processed.width}×${ui.letterAttachment.processed.height}</figcaption><button type="button" class="text-button" data-remove-letter-photo>移除照片</button></figure>`
-    : "<small>尚未添加照片。</small>";
+    ? `<figure><img src="${ui.letterAttachment.processed.previewDataUrl}" alt="信件附图热敏预览"><button type="button" class="text-button" data-remove-letter-photo>移除照片</button></figure>`
+    : "";
   wrap.querySelector("[data-remove-letter-photo]")?.addEventListener("click", () => {
     ui.letterAttachment = null;
     updateLetterAttachmentPreview(form);
@@ -1839,57 +1783,6 @@ function wire() {
   });
 
   document.querySelector("[data-open-simulator]")?.addEventListener("click", () => window.open("/simulator.html", "aihub-device-simulator"));
-  const printerTestForm = document.querySelector("#printer-test-form");
-  const submitPrinterTest = async () => {
-    if (!printerTestForm) return;
-    const values = Object.fromEntries(new FormData(printerTestForm));
-    const submitButton = printerTestForm.querySelector('button[type="submit"]');
-    const resultLabel = document.querySelector("#printer-test-result");
-    submitButton.disabled = true;
-    if (resultLabel) resultLabel.textContent = "正在发送…";
-    try {
-      const result = await api.printText({
-        text: values.text,
-        language: values.language,
-        font: values.font,
-        bold: printerTestForm.elements.bold.checked,
-        underline: printerTestForm.elements.underline.checked,
-        invert: printerTestForm.elements.invert.checked,
-        width: Number(values.width),
-        height: Number(values.height),
-        align: values.align,
-        feedAfter: Number(values.feedAfter),
-        jobId: `test-${Date.now()}`,
-        source: "device-test"
-      });
-      if (resultLabel) resultLabel.textContent = `${result.encoding} · ${result.encodedBytes} bytes · 已接收`;
-      toast(result.encodingLossy ? "已打印，但内容含 GB2312 不支持的字符" : "测试内容已发送到真实打印机", result.encodingLossy ? "default" : "success");
-    } catch (error) {
-      if (resultLabel) resultLabel.textContent = "发送失败";
-      toast(error.message, "error");
-    } finally {
-      submitButton.disabled = false;
-    }
-  };
-  printerTestForm?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    await submitPrinterTest();
-  });
-  document.querySelector("[data-test-print]")?.addEventListener("click", submitPrinterTest);
-  document.querySelectorAll("[data-printer-sample]").forEach((button) => button.addEventListener("click", () => {
-    const chinese = button.dataset.printerSample === "zh";
-    printerTestForm.elements.text.value = chinese ? "你好呀！\n我是打印机~" : "A";
-    printerTestForm.elements.language.value = chinese ? "zh" : "en";
-    printerTestForm.elements.font.value = chinese ? "B" : "A";
-    printerTestForm.elements.bold.checked = true;
-    printerTestForm.elements.underline.checked = !chinese;
-    printerTestForm.elements.invert.checked = false;
-    printerTestForm.elements.width.value = "1";
-    printerTestForm.elements.height.value = "1";
-    printerTestForm.elements.align.value = "center";
-    printerTestForm.elements.feedAfter.value = chinese ? "3" : "2";
-    printerTestForm.elements.text.focus();
-  }));
   document.querySelector("[data-save-policy]")?.addEventListener("click", async (event) => {
     const mode = document.querySelector('input[name="policyMode"]:checked')?.value ?? "FRIENDS";
     const paused = document.querySelector("#print-paused")?.checked ?? false;
