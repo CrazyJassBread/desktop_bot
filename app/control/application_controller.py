@@ -28,9 +28,11 @@ class ApplicationController:
         *,
         default_language: str = "zh",
         photo_manager: object | None = None,
+        llm_session_manager: object | None = None,
     ) -> None:
         self.state = AppState(language=default_language)
         self.photo_manager = photo_manager
+        self.llm_session_manager = llm_session_manager
         self._emit: EventEmitter | None = None
 
     def set_event_emitter(self, emitter: EventEmitter) -> None:
@@ -38,11 +40,32 @@ class ApplicationController:
         if self.photo_manager is not None:
             set_emitter = getattr(self.photo_manager, "set_event_emitter")
             set_emitter(emitter)
+        if self.llm_session_manager is not None:
+            set_emitter = getattr(
+                self.llm_session_manager,
+                "set_event_emitter",
+            )
+            set_emitter(emitter)
 
     async def handle(
         self,
         event: PerceptionEvent,
     ) -> tuple[PerceptionEvent, ...]:
+        if self.llm_session_manager is not None:
+            if event.event_type in {
+                "llm.letter.start",
+                "llm.qa.start",
+                "speech.transcribed",
+            }:
+                return await getattr(
+                    self.llm_session_manager,
+                    "handle",
+                )(event)
+            if (
+                getattr(self.llm_session_manager, "active")
+                and event.source == "audio"
+            ):
+                return ()
         if event.event_type in {"wake", "mode.enter_chat"}:
             return self._start_chat(event)
         if event.event_type == "mode.exit_chat":
@@ -239,3 +262,5 @@ class ApplicationController:
     async def aclose(self) -> None:
         if self.photo_manager is not None:
             await getattr(self.photo_manager, "aclose")()
+        if self.llm_session_manager is not None:
+            await getattr(self.llm_session_manager, "aclose")()

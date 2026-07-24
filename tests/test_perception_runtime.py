@@ -24,6 +24,7 @@ from app.detection.keywords import KeywordDetector
 from app.event_cache import EventCache
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
 from app.features.thermal_printer import PrintResult, PrinterError
+from app.hardware_main import build_daemon, build_parser
 from app.llm.mode_detector import LLMModeDetector
 from app.perception_events import PerceptionEvent
 from app.runtime.perception_daemon import PerceptionDaemon
@@ -63,6 +64,46 @@ class RecordingPrinter:
         if self.failure is not None:
             raise PrinterError(self.failure)
         return PrintResult(width=384, height=288, chunk_count=1)
+
+
+class RecordingLLMSessionManager:
+    def __init__(self) -> None:
+        self.active = False
+        self.calls: list[PerceptionEvent] = []
+        self.emitter = None
+        self.closed = False
+
+    def set_event_emitter(self, emitter) -> None:
+        self.emitter = emitter
+
+    async def handle(
+        self,
+        event: PerceptionEvent,
+    ) -> tuple[PerceptionEvent, ...]:
+        self.calls.append(event)
+        if event.event_type.startswith("llm.") and event.event_type.endswith(
+            ".start"
+        ):
+            self.active = True
+            return (
+                PerceptionEvent(
+                    "llm.session_started",
+                    "llm",
+                    session_id=event.session_id,
+                ),
+            )
+        if event.event_type == "speech.transcribed":
+            return (
+                PerceptionEvent(
+                    "llm.transcript_buffered",
+                    "llm",
+                    session_id=event.session_id,
+                ),
+            )
+        return ()
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def jpeg_bytes() -> bytes:
@@ -265,6 +306,82 @@ async def test_controller_routes_chat_and_language_commands():
     assert [item.event_type for item in victory] == [
         "photo.capture_failed"
     ]
+
+
+@pytest.mark.asyncio
+async def test_controller_delegates_llm_and_suppresses_only_audio_intents():
+    llm_manager = RecordingLLMSessionManager()
+    controller = ApplicationController(
+        llm_session_manager=llm_manager,
+    )
+
+    started = await controller.handle(
+        PerceptionEvent("llm.letter.start", "audio")
+    )
+    buffered = await controller.handle(
+        PerceptionEvent(
+            "speech.transcribed",
+            "audio",
+            payload={"transcript": "正文内容"},
+        )
+    )
+    suppressed = await controller.handle(
+        PerceptionEvent("feature.photo_print", "audio")
+    )
+    visual = await controller.handle(
+        PerceptionEvent("gesture.open_palm", "vision")
+    )
+
+    assert [event.event_type for event in started] == [
+        "llm.session_started"
+    ]
+    assert [event.event_type for event in buffered] == [
+        "llm.transcript_buffered"
+    ]
+    assert suppressed == ()
+    assert [event.event_type for event in visual] == [
+        "command.language.set",
+        "language.changed",
+    ]
+    assert [event.event_type for event in llm_manager.calls] == [
+        "llm.letter.start",
+        "speech.transcribed",
+    ]
+    await controller.aclose()
+    assert llm_manager.closed is True
+
+
+@pytest.mark.asyncio
+async def test_build_daemon_wires_enabled_llm_components(
+    monkeypatch,
+    tmp_path,
+):
+    config = load_config()
+    config.llm.enabled = True
+    config.llm.base_url = "https://example.test/v1"
+    config.llm.model = "test-model"
+    config.llm.log_path = str(tmp_path / "llm.log")
+    monkeypatch.setattr(
+        "app.hardware_main.build_vad",
+        lambda _config: MockVADBackend([]),
+    )
+    monkeypatch.setattr(
+        "app.hardware_main.build_asr",
+        lambda _config: SequenceASR([]),
+    )
+
+    daemon, gesture_backend = build_daemon(
+        config,
+        build_parser().parse_args(["--audio-only"]),
+    )
+
+    assert gesture_backend is None
+    assert daemon.audio_processor is not None
+    assert daemon.audio_processor.llm_detector is not None
+    controller = daemon.application_controller
+    assert controller is not None
+    assert controller.llm_session_manager is not None
+    await controller.aclose()
 
 
 @pytest.mark.asyncio

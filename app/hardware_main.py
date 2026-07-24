@@ -15,9 +15,18 @@ from app.control.application_controller import ApplicationController
 from app.detection.keywords import KeywordDetector
 from app.event_cache import EventCache
 from app.events.event_bus import EventBus
-from app.factories import build_asr, build_gesture, build_vad, setup_logging
+from app.factories import (
+    build_asr,
+    build_gesture,
+    build_vad,
+    setup_llm_logging,
+    setup_logging,
+)
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
 from app.features.thermal_printer import ThermalPrinterClient
+from app.llm.client import OpenAICompatibleClient
+from app.llm.mode_detector import LLMModeDetector
+from app.llm.session import LLMSessionManager
 from app.runtime.perception_daemon import PerceptionDaemon
 from app.transport.hardware_sources import (
     HTTPJPEGImageSource,
@@ -81,6 +90,8 @@ def build_daemon(
     event_bus = EventBus(config.perception.event_cache_capacity)
     latest_frame_store = LatestFrameStore()
     photo_manager = None
+    llm_detector = None
+    llm_session_manager = None
 
     if audio_enabled:
         if not config.vad.enabled:
@@ -101,10 +112,18 @@ def build_daemon(
             build_vad(config),
             config.audio.target_sample_rate,
         )
+        if config.llm.enabled:
+            llm_detector = LLMModeDetector(config.llm.modes)
+            llm_session_manager = LLMSessionManager(
+                config.llm,
+                OpenAICompatibleClient.from_config(config.llm),
+                logger=setup_llm_logging(config.llm.log_path),
+            )
         audio_processor = KeywordASRProcessor(
             build_asr(config),
             KeywordDetector(config.keywords),
             session_id=session_id,
+            llm_detector=llm_detector,
         )
 
     if vision_enabled:
@@ -163,6 +182,7 @@ def build_daemon(
     controller = ApplicationController(
         default_language=config.application.default_language,
         photo_manager=photo_manager,
+        llm_session_manager=llm_session_manager,
     )
 
     daemon = PerceptionDaemon(
