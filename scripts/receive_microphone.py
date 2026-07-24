@@ -4,7 +4,7 @@ import socket
 import wave
 
 HOST = "0.0.0.0"
-PORT = 8080
+PORT = 8081
 SAMPLE_RATE = 16_000
 CHANNELS = 1
 SAMPLE_WIDTH = 2

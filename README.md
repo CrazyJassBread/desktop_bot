@@ -19,6 +19,8 @@ Open Palm → 异步等待 2 秒 → 最新 JPEG → AI 照片处理程序      
 - [App 完整工作 Pipeline](docs/app-pipeline.md)：启动、信号来源、传输过程、
   最终输出和逐文件职责；
 - [持续感知 Runtime](docs/perception-runtime.md)：核心运行策略和事件格式。
+- [Web 集成 MVP](integrations/ai-hub-os-web)：AI Hub OS Web + API，包含
+  DeepSeek 意图识别、AI Letter、热敏打印模板、前端设备页和 Web bridge。
 
 ## 环境
 
@@ -101,8 +103,8 @@ AI 照片程序的 multipart HTTP 地址配置在
 
 ```bash
 python -m app \
-  --audio-host 192.168.1.10 --audio-port 8080 \
-  --vision-host 192.168.1.10 --vision-port 8081
+  --audio-host 192.168.1.10 --audio-port 8081 \
+  --vision-host 192.168.1.10 --vision-port 8082
 ```
 
 每个 ASR 转写都会以 JSON 写入控制台和 `logs/perception.log`，包括未命中关键词
@@ -113,7 +115,7 @@ python -m app \
 
 音频：
 
-- TCP `0.0.0.0:8080`
+- TCP `0.0.0.0:8081`
 - 16 kHz
 - 单声道
 - signed 16-bit little-endian PCM
@@ -121,7 +123,7 @@ python -m app \
 
 视觉：
 
-- HTTP `POST http://0.0.0.0:8081/upload`
+- HTTP `POST http://0.0.0.0:8082/upload`
 - 请求体为原始 JPEG
 - 默认尺寸严格为 640×480
 - 接收端只保留最新一张待处理图片
@@ -132,6 +134,46 @@ python -m app \
 python -m scripts.receive_microphone
 python -m scripts.receive_images
 ```
+
+实时查看板载麦克风转写和 Web 联动事件：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/watch_mic_transcripts.ps1
+```
+
+该脚本会同时显示：
+
+- `BOT speech.transcribed`：desktop_bot 从板载麦克风识别出的文本；
+- `WEB letter.*`：Web bridge 触发的写信、发送和打印联动结果；
+- `LIVE / STALE / WAITING`：音频帧是否仍在实时进入。
+
+如需统一修改硬件端口：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/set_hardware_ports.ps1 -AudioPort 8081 -VisionPort 8082
+```
+
+当前保留端口：
+
+- `8081`：ESP32-S3 麦克风 TCP PCM；
+- `8082`：ESP32-S3 图像 HTTP 上传；
+- `8090`：desktop_bot HTTP/WebSocket API；
+- `18000`：AI Hub OS Web MVP。
+
+启动 Web MVP：
+
+```powershell
+cd integrations/ai-hub-os-web
+copy .env.example .env.local
+npm install
+npm run dev
+```
+
+页面地址：
+
+- `http://127.0.0.1:18000/education`：本地电脑麦克风、学习 AI 和可打印内容；
+- `http://127.0.0.1:18000/letter/create`：写信、预览 384 px 热敏模板、发送打印；
+- `http://127.0.0.1:18000/device`：设备状态、打印测试、desktop_bot 感知事件。
 
 ## 配置
 

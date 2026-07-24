@@ -13,8 +13,8 @@ IMAGE_DIR = Path("received_images")
 
 async def receive() -> None:
     IMAGE_DIR.mkdir(exist_ok=True)
-    source = HTTPJPEGImageSource("0.0.0.0", 8081, queue_size=1)
-    print("Listening on http://0.0.0.0:8081/upload")
+    source = HTTPJPEGImageSource("0.0.0.0", 8082, queue_size=1)
+    print("Listening on http://0.0.0.0:8082/upload")
     async for request in source.images():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         path = IMAGE_DIR / f"{timestamp}.jpg"

@@ -17,7 +17,7 @@
 
 ```mermaid
 flowchart LR
-    AudioDevice["Bot 麦克风固件"] -->|"TCP PCM :8080"| AudioSource["TCPPCMAudioSource"]
+    AudioDevice["Bot 麦克风固件"] -->|"TCP PCM :8081"| AudioSource["TCPPCMAudioSource"]
     AudioSource -->|"512-sample float32 帧"| VAD["Silero VAD + StreamingAudioPipeline"]
     VAD -->|"完整 AudioData"| UtteranceQueue["完整语句队列（最多 4 条）"]
     UtteranceQueue --> ASR["Faster Whisper"]
@@ -26,7 +26,7 @@ flowchart LR
     Keyword -->|"所有非空转写"| Transcript["speech.transcribed"]
     Keyword -->|"命中"| AudioEvent["音频意图 PerceptionEvent"]
 
-    Camera["Bot Vision 固件"] -->|"HTTP JPEG :8081/upload"| ImageSource["HTTPJPEGImageSource"]
+    Camera["Bot Vision 固件"] -->|"HTTP JPEG :8082/upload"| ImageSource["HTTPJPEGImageSource"]
     ImageSource -->|"只保留最新 ImageRequest"| Decode["JPEG 校验与 RGB 解码"]
     Decode --> Gesture["MediaPipe GestureRecognizer"]
     Gesture --> Stabilizer["GestureStabilizer"]
@@ -232,7 +232,7 @@ flowchart TB
 音频来自 Bot 麦克风固件建立的 TCP 连接：
 
 ```text
-监听：0.0.0.0:8080
+监听：0.0.0.0:8081
 格式：raw PCM
 采样率：16000 Hz
 通道：单声道
@@ -446,7 +446,7 @@ INFO desktop_assistant.asr asr result {
 图像来自 Bot Vision 固件发送的 HTTP 请求：
 
 ```text
-POST http://<host>:8081/upload
+POST http://<host>:8082/upload
 Content-Type: image/jpeg
 Content-Length: <JPEG字节数>
 
