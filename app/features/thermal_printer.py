@@ -2,9 +2,27 @@
 
 from __future__ import annotations
 
+import socket
+from dataclasses import dataclass
 from io import BytesIO
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageEnhance, ImageOps, UnidentifiedImageError
+
+
+class PrinterError(RuntimeError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class PrintResult:
+    width: int
+    height: int
+    chunk_count: int
 
 
 def quantize_grayscale(image: Image.Image, levels: int) -> Image.Image:
@@ -105,3 +123,86 @@ def pack_bitmap(image: Image.Image) -> bytes:
             if pixels[x, y] == 0:
                 output[row_offset + x // 8] |= 1 << (7 - (x % 8))
     return bytes(output)
+
+
+class ThermalPrinterClient:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        width: int = 384,
+        max_chunk_height: int = 1200,
+        pixel_size: int = 6,
+        contrast: float = 1.2,
+        brightness: float = 1.0,
+        grayscale_levels: int = 4,
+        dither: bool = True,
+        rotate_180: bool = False,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        if not base_url.strip():
+            raise ValueError("base_url cannot be empty")
+        if max_chunk_height <= 0:
+            raise ValueError("max_chunk_height must be positive")
+        if timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        self.base_url = base_url.rstrip("/")
+        self.width = width
+        self.max_chunk_height = max_chunk_height
+        self.pixel_size = pixel_size
+        self.contrast = contrast
+        self.brightness = brightness
+        self.grayscale_levels = grayscale_levels
+        self.dither = dither
+        self.rotate_180 = rotate_180
+        self.timeout_seconds = timeout_seconds
+
+    def print_image(self, image_bytes: bytes) -> PrintResult:
+        try:
+            image = convert_to_printer_image(
+                image_bytes,
+                printer_width=self.width,
+                pixel_size=self.pixel_size,
+                contrast=self.contrast,
+                brightness=self.brightness,
+                grayscale_levels=self.grayscale_levels,
+                dither=self.dither,
+                rotate_180=self.rotate_180,
+            )
+        except (OSError, UnidentifiedImageError, ValueError) as exc:
+            raise PrinterError("invalid_image") from exc
+
+        chunks = split_image(image, self.max_chunk_height)
+        for chunk in chunks:
+            self._post_chunk(chunk)
+        return PrintResult(image.width, image.height, len(chunks))
+
+    def _post_chunk(self, chunk: Image.Image) -> None:
+        query = urlencode(
+            {
+                "width": chunk.width,
+                "height": chunk.height,
+            }
+        )
+        request = Request(
+            f"{self.base_url}/printer/image?{query}",
+            data=pack_bitmap(chunk),
+            method="POST",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                response.read()
+        except HTTPError as exc:
+            raise PrinterError("http_error") from exc
+        except (socket.timeout, TimeoutError) as exc:
+            raise PrinterError("timeout") from exc
+        except URLError as exc:
+            reason = (
+                "timeout"
+                if isinstance(exc.reason, (socket.timeout, TimeoutError))
+                else "connection_error"
+            )
+            raise PrinterError(reason) from exc
+        except OSError as exc:
+            raise PrinterError("connection_error") from exc
