@@ -33,7 +33,7 @@ vad:
   min_speech_duration_ms: 250
   min_silence_duration_ms: 800
   pre_roll_ms: 200
-  max_utterance_seconds: 45
+  max_utterance_seconds: 60
 
 # ASR text is discarded unless one of these phrases is present.
 keywords:

@@ -29,6 +29,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Continuously detect meaningful audio and vision events."
     )
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        choices=("run", "test"),
+        default="run",
+        help="run the service, or open the live Vision test window",
+    )
     parser.add_argument("--config", type=Path, default=Path("config.yaml"))
     parser.add_argument("--session", default=None)
     channel = parser.add_mutually_exclusive_group()
@@ -38,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio-port", type=int, default=None)
     parser.add_argument("--vision-host", default=None)
     parser.add_argument("--vision-port", type=int, default=None)
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.25,
+        help="display scale used by test mode",
+    )
     return parser
 
 
@@ -144,10 +157,29 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     try:
-        asyncio.run(run(args))
+        if args.mode == "test":
+            from scripts.vision_live import run_live_view
+
+            asyncio.run(
+                run_live_view(
+                    args.config,
+                    host=args.vision_host,
+                    port=args.vision_port,
+                    session_id=args.session,
+                    scale=args.scale,
+                )
+            )
+        else:
+            asyncio.run(run(args))
     except KeyboardInterrupt:
         LOGGER.info("stopped by user")
-    except (ConfigurationError, VADError, VisionError) as exc:
+    except (
+        ConfigurationError,
+        OSError,
+        RuntimeError,
+        VADError,
+        VisionError,
+    ) as exc:
         parser.error(str(exc))
 
 

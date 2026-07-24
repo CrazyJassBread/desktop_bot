@@ -129,6 +129,7 @@ async def test_vision_emits_once_while_gesture_is_held_and_rearms():
     for _ in results:
         result = await processor.process(ImageRequest(jpeg_bytes(), "bot"))
         assert result.error is None
+        assert result.rgb_image is not None
         events.extend(result.events)
 
     assert [item.event_type for item in events] == [

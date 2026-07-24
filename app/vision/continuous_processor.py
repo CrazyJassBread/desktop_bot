@@ -6,6 +6,8 @@ import asyncio
 import time
 from dataclasses import dataclass
 
+import numpy as np
+
 from app.config import PerceptionConfig, VisionConfig
 from app.models import GestureDetection, ImageRequest
 from app.perception_events import PerceptionEvent
@@ -18,6 +20,7 @@ from app.vision.image_loader import decode_jpeg
 class VisionProcessingResult:
     detections: tuple[GestureDetection, ...] = ()
     events: tuple[PerceptionEvent, ...] = ()
+    rgb_image: np.ndarray | None = None
     error: str | None = None
 
 
@@ -40,6 +43,16 @@ class ContinuousVisionProcessor:
                     vision_config.release_frames,
                 ),
                 "Thumb_Up": GesturePolicy(
+                    vision_config.gesture_window_size,
+                    vision_config.gesture_required_hits,
+                    vision_config.release_frames,
+                ),
+                "Thumb_Down": GesturePolicy(
+                    vision_config.gesture_window_size,
+                    vision_config.gesture_required_hits,
+                    vision_config.release_frames,
+                ),
+                "Open_Palm": GesturePolicy(
                     vision_config.gesture_window_size,
                     vision_config.gesture_required_hits,
                     vision_config.release_frames,
@@ -85,7 +98,7 @@ class ContinuousVisionProcessor:
                 )
                 for label in stable
             )
-            return VisionProcessingResult(detections, events)
+            return VisionProcessingResult(detections, events, rgb)
         except VisionError as exc:
             return VisionProcessingResult(error=exc.code)
         except Exception:

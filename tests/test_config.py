@@ -1,6 +1,7 @@
 import pytest
 
 from app.config import ConfigurationError, load_config
+from app.hardware_main import build_parser
 
 
 def test_config_defaults():
@@ -48,3 +49,11 @@ def test_config_rejects_conflicting_hardware_ports(tmp_path):
     with pytest.raises(ConfigurationError):
         load_config(path)
 
+
+def test_app_cli_supports_vision_test_mode():
+    args = build_parser().parse_args(
+        ["test", "--vision-port", "9000", "--scale", "1.5"]
+    )
+    assert args.mode == "test"
+    assert args.vision_port == 9000
+    assert args.scale == 1.5

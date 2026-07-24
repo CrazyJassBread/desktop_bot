@@ -11,7 +11,11 @@ HTTP JPEG → 最新帧 → MediaPipe → 手势稳定检测 → EventCache
 普通闲聊、静音、无效语音和未稳定的视觉结果不会进入缓存。LLM、写信和设备动作
 将在后续作为 `PerceptionEvent` 消费者接入。
 
-详细设计见 [持续感知 Runtime](docs/perception-runtime.md)。
+文档：
+
+- [App 完整工作 Pipeline](docs/app-pipeline.md)：启动、信号来源、传输过程、
+  最终输出和逐文件职责；
+- [持续感知 Runtime](docs/perception-runtime.md)：核心运行策略和事件格式。
 
 ## 环境
 
@@ -54,6 +58,16 @@ python -m app.hardware_main
 python -m app --audio-only
 python -m app --vision-only
 ```
+
+打开 Vision 实时测试窗口：
+
+```bash
+python -m app test
+```
+
+该模式只启动 Vision 接收端，不启动 Audio Runtime。窗口显示最新画面、单帧手势、
+置信度和稳定事件。按 `q`、`Esc` 或关闭窗口退出。可通过 `--scale 1.5` 调整
+窗口尺寸。
 
 覆盖监听地址：
 
