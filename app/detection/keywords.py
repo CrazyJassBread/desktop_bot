@@ -51,6 +51,7 @@ class KeywordDetector:
         self._rules = (
             ("mode.enter_chat", config.enter_chat),
             ("mode.exit_chat", config.exit_chat),
+            ("feature.photo_print", config.photo_print),
             ("feature.write_letter", config.write_letter),
             *(
                 (f"intent.{command_type}", phrases)

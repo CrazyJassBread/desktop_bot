@@ -66,6 +66,25 @@ def test_keyword_detector_prioritizes_features_and_ignores_chatter():
     assert detector.detect("今天天气不错") is None
 
 
+@pytest.mark.parametrize(
+    "transcript",
+    [
+        "请拍照",
+        "给我照相",
+        "给我拍一张",
+        "打印照片",
+        "photo please",
+        "take a photo",
+        "take a picture",
+    ],
+)
+def test_keyword_detector_recognizes_photo_print_intents(transcript):
+    match = KeywordDetector(KeywordConfig()).detect(transcript)
+
+    assert match is not None
+    assert match.event_type == "feature.photo_print"
+
+
 def test_keyword_detector_preserves_chat_question_text():
     detector = KeywordDetector(KeywordConfig())
     match = detector.detect("小 A，开始聊天：What is RL?")

@@ -10,9 +10,13 @@ def test_config_defaults():
     assert config.hardware.audio_port == 8080
     assert config.hardware.vision_port == 8081
     assert config.keywords.wake
+    assert config.keywords.photo_print
     assert config.perception.vision_max_fps == 5
-    assert config.application.photo_delay_seconds == 2
+    assert config.application.photo_delay_seconds == 1
     assert config.application.default_language == "zh"
+    assert config.printer.base_url == "http://10.76.7.129"
+    assert config.printer.width == 384
+    assert config.printer.cooldown_seconds == 2
     assert config.api.port == 8090
 
 
@@ -49,6 +53,29 @@ def test_config_rejects_conflicting_hardware_ports(tmp_path):
         "hardware:\n  audio_port: 8080\n  vision_port: 8080\n",
         encoding="utf-8",
     )
+    with pytest.raises(ConfigurationError):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'printer:\n  base_url: ""\n',
+        "printer:\n  width: 0\n",
+        "printer:\n  max_chunk_height: 0\n",
+        "printer:\n  pixel_size: 0\n",
+        "printer:\n  grayscale_levels: 1\n",
+        "printer:\n  grayscale_levels: 257\n",
+        "printer:\n  contrast: 0\n",
+        "printer:\n  brightness: 0\n",
+        "printer:\n  timeout_seconds: 0\n",
+        "printer:\n  cooldown_seconds: -1\n",
+    ],
+)
+def test_config_rejects_invalid_printer_settings(tmp_path, body):
+    path = tmp_path / "config.yaml"
+    path.write_text(body, encoding="utf-8")
+
     with pytest.raises(ConfigurationError):
         load_config(path)
 

@@ -72,6 +72,17 @@ class KeywordConfig:
     write_letter: list[str] = field(
         default_factory=lambda: ["帮我写信", "我要写一封信"]
     )
+    photo_print: list[str] = field(
+        default_factory=lambda: [
+            "拍照",
+            "照相",
+            "给我拍一张",
+            "打印照片",
+            "photo",
+            "take a photo",
+            "take a picture",
+        ]
+    )
     custom: dict[str, list[str]] = field(default_factory=dict)
 
 
@@ -104,7 +115,7 @@ class VisionConfig:
 class ApplicationConfig:
     default_language: str = "zh"
     photo_enabled: bool = True
-    photo_delay_seconds: float = 2.0
+    photo_delay_seconds: float = 1.0
     photo_frame_max_age_seconds: float = 1.0
     photo_output_dir: str = "captured_photos"
     photo_processor_url: str = ""
@@ -120,6 +131,22 @@ class APIConfig:
 
 
 @dataclass
+class PrinterConfig:
+    enabled: bool = True
+    base_url: str = "http://10.76.7.129"
+    width: int = 384
+    max_chunk_height: int = 1_200
+    pixel_size: int = 6
+    grayscale_levels: int = 4
+    contrast: float = 1.2
+    brightness: float = 1.0
+    dither: bool = True
+    rotate_180: bool = False
+    timeout_seconds: float = 30.0
+    cooldown_seconds: float = 2.0
+
+
+@dataclass
 class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     asr: ASRConfig = field(default_factory=ASRConfig)
@@ -129,6 +156,7 @@ class AppConfig:
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
     application: ApplicationConfig = field(default_factory=ApplicationConfig)
+    printer: PrinterConfig = field(default_factory=PrinterConfig)
     api: APIConfig = field(default_factory=APIConfig)
 
 
@@ -141,6 +169,7 @@ _SECTIONS: dict[str, type[Any]] = {
     "perception": PerceptionConfig,
     "vision": VisionConfig,
     "application": ApplicationConfig,
+    "printer": PrinterConfig,
     "api": APIConfig,
 }
 
@@ -233,6 +262,7 @@ def _validate(config: AppConfig) -> None:
         ("keywords.enter_chat", config.keywords.enter_chat),
         ("keywords.exit_chat", config.keywords.exit_chat),
         ("keywords.write_letter", config.keywords.write_letter),
+        ("keywords.photo_print", config.keywords.photo_print),
     ):
         if not isinstance(phrases, list) or not all(
             isinstance(item, str) and item.strip() for item in phrases
@@ -290,6 +320,39 @@ def _validate(config: AppConfig) -> None:
         raise ConfigurationError(
             "application.photo_output_dir cannot be empty"
         )
+    if not isinstance(config.printer.enabled, bool):
+        raise ConfigurationError("printer.enabled must be a boolean")
+    if not isinstance(config.printer.base_url, str) or not (
+        config.printer.base_url.strip()
+    ):
+        raise ConfigurationError("printer.base_url cannot be empty")
+    for name, value in (
+        ("printer.width", config.printer.width),
+        ("printer.max_chunk_height", config.printer.max_chunk_height),
+        ("printer.pixel_size", config.printer.pixel_size),
+    ):
+        _positive_int(value, name)
+    if (
+        isinstance(config.printer.grayscale_levels, bool)
+        or not isinstance(config.printer.grayscale_levels, int)
+        or not 2 <= config.printer.grayscale_levels <= 256
+    ):
+        raise ConfigurationError(
+            "printer.grayscale_levels must be between 2 and 256"
+        )
+    for name, value in (
+        ("printer.contrast", config.printer.contrast),
+        ("printer.brightness", config.printer.brightness),
+        ("printer.timeout_seconds", config.printer.timeout_seconds),
+        ("printer.cooldown_seconds", config.printer.cooldown_seconds),
+    ):
+        _positive(value, name)
+    for name, value in (
+        ("printer.dither", config.printer.dither),
+        ("printer.rotate_180", config.printer.rotate_180),
+    ):
+        if not isinstance(value, bool):
+            raise ConfigurationError(f"{name} must be a boolean")
     if isinstance(config.api.port, bool) or not isinstance(config.api.port, int):
         raise ConfigurationError("api.port must be an integer")
     if not 1 <= config.api.port <= 65_535:
