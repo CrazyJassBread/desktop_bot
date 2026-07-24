@@ -22,54 +22,71 @@ def split_image(image: Image.Image, max_height=1200):
 
     return pieces
 
+def quantize_grayscale(
+    image: Image.Image,
+    levels: int,
+) -> Image.Image:
+    """
+    Clamp a grayscale image to a fixed number of grey levels.
+
+    Examples:
+        levels=2:
+            0, 255
+
+        levels=3:
+            0, 128, 255
+
+        levels=4:
+            0, 85, 170, 255
+
+        levels=10:
+            0, 28, 57, ..., 255
+
+    The input and output images use Pillow mode "L".
+    """
+
+    if image.mode != "L":
+        image = image.convert("L")
+
+    if levels < 2:
+        raise ValueError("levels must be at least 2")
+
+    if levels > 256:
+        raise ValueError("levels cannot be greater than 256")
+
+    step = 255 / (levels - 1)
+
+    lookup_table = [
+        round(round(value / step) * step)
+        for value in range(256)
+    ]
+
+    return image.point(lookup_table)
+
 def convert_to_printer_image(
     image: Image.Image,
     printer_width: int = PRINTER_WIDTH,
     pixel_size: int = 4,
     contrast: float = 1.2,
     brightness: float = 1.0,
+    grayscale_levels: int = 4,
     dither: bool = True,
     rotate_180: bool = False,
 ) -> Image.Image:
     """
-    Convert a normal Pillow image into a printer-ready 1-bit Pillow image.
+    Convert a normal Pillow image into a printer-ready 1-bit image.
 
-    The result:
-        - fits the printer width
-        - preserves aspect ratio
-        - removes transparency
-        - converts to grayscale
-        - optionally creates a pixel-art look
-        - optionally rotates 180 degrees
-        - uses dithering to simulate grey
-        - returns Pillow mode "1"
+    grayscale_levels:
+        Number of grayscale levels used before converting to the
+        printer's final black-and-white format.
 
-    Parameters:
-        image:
-            Input Pillow image.
+        2  = pure black and pure white only
+        3  = black, middle grey, white
+        4  = four grey levels
+        10 = smoother grey transitions
 
-        printer_width:
-            Output width in pixels. Use 384 for your printer.
-
-        pixel_size:
-            Size of the visible pixel-art blocks.
-
-            1 = no pixelation
-            2 = light pixel-art effect
-            4 = balanced pixel-art effect
-            8 = strong pixel-art effect
-
-        contrast:
-            Contrast multiplier.
-
-        brightness:
-            Brightness multiplier.
-
-        dither:
-            True uses black-dot density to simulate grey.
-
-        rotate_180:
-            True turns the final image upside down.
+    The thermal printer still receives a 1-bit bitmap. Intermediate
+    greys are represented through dithering.
     """
 
     if not isinstance(image, Image.Image):
@@ -87,12 +104,18 @@ def convert_to_printer_image(
     if brightness <= 0:
         raise ValueError("brightness must be greater than 0")
 
-    # Correct orientation from phone-camera EXIF metadata.
+    if not 2 <= grayscale_levels <= 256:
+        raise ValueError(
+            "grayscale_levels must be between 2 and 256"
+        )
+
+    # Correct phone-camera orientation.
     image = ImageOps.exif_transpose(image)
 
     # Remove transparency by placing the image on white.
     if image.mode in ("RGBA", "LA") or (
-        image.mode == "P" and "transparency" in image.info
+        image.mode == "P"
+        and "transparency" in image.info
     ):
         rgba = image.convert("RGBA")
 
@@ -158,13 +181,19 @@ def convert_to_printer_image(
             Image.Resampling.NEAREST,
         )
 
+    # Clamp the grayscale values.
+    image = quantize_grayscale(
+        image,
+        grayscale_levels,
+    )
+
     if rotate_180:
         image = image.rotate(
             180,
             expand=False,
         )
 
-    # Convert to black and white.
+    # Convert the grayscale image to the printer's 1-bit format.
     if dither:
         image = image.convert(
             "1",
@@ -179,6 +208,7 @@ def convert_to_printer_image(
         )
 
     return image
+
 
 def text_to_img(
     text: str,
