@@ -136,7 +136,7 @@ python -m scripts.receive_images
 
 ## 配置
 
-[config.yaml](config.yaml) 包含当前运行时使用的十部分：
+[config.yaml](config.yaml) 包含当前运行时使用的十一部分：
 
 - `audio`：采样率；
 - `asr`：Faster Whisper 模型和推理设备；
@@ -147,6 +147,7 @@ python -m scripts.receive_images
 - `vision`：MediaPipe 模型、尺寸和稳定检测策略。
 - `application`：默认语言、1 秒拍照、照片目录和下游处理地址；
 - `printer`：打印机地址、384 像素图像参数、超时和 2 秒冷却；
+- `llm`：OpenAI-compatible API、语音会话限制和两种模式短语；
 - `api`：HTTP/WebSocket 集成接口。
 
 尚未确定的语音入口可以添加到 `keywords.custom`。例如
@@ -159,6 +160,20 @@ python -m scripts.receive_images
 `Victory` 手势后，会启动同一个照片打印流程：等待 1 秒，取届时最新相机帧，
 灰度化并像素化，然后调用 `{printer.base_url}/printer/image`。`Open_Palm`
 用于切换中英文。打印任务和随后的 2 秒冷却期间会忽略重复触发，不建立队列。
+
+阶段一 LLM 功能默认关闭。配置 `llm.base_url`、`llm.model` 后，将 API Key
+放入 `llm.api_key_env` 指定的环境变量，再设置 `llm.enabled: true`：
+
+```bash
+export LLM_API_KEY="..."
+python -m app
+```
+
+写信和问答模式分别使用 YAML 中的开始、结束和取消短语。会话期间普通 ASR 转录
+只暂存在内存；只有完整匹配当前模式的结束/取消句才执行控制操作。以“正文：”开头
+可以强制把冲突短语保存为正文。写信结果产生 `llm.letter_completed`，问答结果产生
+`llm.answer_completed`，完整调试信息写入 `logs/llm.log`。阶段一不会打印 LLM
+结果，打印排版属于阶段二。
 
 ## 测试
 
@@ -174,7 +189,8 @@ python -m scripts.receive_images
 - 事件缓存容量和 TTL；
 - 音频事件主链路；
 - 视觉手势稳定触发和重新武装；
-- 打印图像转换、位图协议、触发去重和失败恢复。
+- 打印图像转换、位图协议、触发去重和失败恢复；
+- LLM 模式检测、会话限制、取消冲突、API 协议和错误恢复。
 
 ## 目录
 

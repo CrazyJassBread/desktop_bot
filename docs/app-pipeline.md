@@ -608,6 +608,8 @@ PerceptionEvent(
 - `mode.exit_chat`
 - `feature.write_letter`
 - `feature.photo_print`
+- `llm.letter.start`
+- `llm.qa.start`
 
 视觉：
 
@@ -632,6 +634,25 @@ Content-Type: application/octet-stream
 成功产生 `photo.captured`、`photo.printed` 和 `photo.completed`。打印功能关闭、
 超时、连接失败或非 2xx 响应产生 `photo.print_failed`。整个任务以及结束后的
 2 秒冷却共用一个任务锁，期间新的语音或 Victory 触发会被忽略，不进入队列。
+
+启用 `llm` 后，LLM 开始短语在普通关键词之前检测。写信模式可以从
+`我要给{recipient}写信` 模板提取收件人，或者进入 `awaiting_recipient` 后等待
+“收件人是…”；问答模式使用配置的 `user_nickname`。进入模式后，多段
+`speech.transcribed` 按顺序暂存在内存，其他音频意图被抑制，视觉手势仍正常工作。
+
+控制语只有在标准化后完整匹配当前模式配置时才生效；`正文：` 前缀优先于控制语并
+在保存前移除。结束后通过 OpenAI-compatible `/chat/completions` 生成结果，并产生：
+
+- `llm.session_started`
+- `llm.recipient_set`
+- `llm.transcript_buffered`
+- `llm.session_cancelled`
+- `llm.session_failed`
+- `llm.letter_completed`
+- `llm.answer_completed`
+
+API Key 只从 `llm.api_key_env` 指定的环境变量读取。原始片段、输出、耗时和错误写入
+独立轮转日志 `logs/llm.log`，不记录 API Key。阶段一不调用打印机。
 
 ### 10.2 EventCache
 
@@ -677,6 +698,7 @@ INFO desktop_assistant.perception perception event <JSON>
 | POST `/api/results` | 聊天和其他功能程序 | 回传回答、任务状态和功能结果 |
 | HTTP `/api/photos/{id}.jpg` | 网站、功能程序 | 语音或 Victory 触发保存的 JPEG |
 | HTTP `{printer.base_url}/printer/image` | 打印机固件 | 灰度像素化后的 1-bit 分块位图 |
+| `logs/llm.log` | 本地调试 | LLM 会话片段、输出、耗时、取消和错误 |
 
 TCP 音频发送端当前不会收到识别文本或业务响应。
 
@@ -761,14 +783,22 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `app/detection/__init__.py` | 导出关键词检测接口 |
 | `app/detection/keywords.py` | 文本标准化、优先级匹配、关键词和 payload 提取 |
 
-### 13.5 Runtime
+### 13.5 LLM
+
+| 文件 | 职责 |
+| --- | --- |
+| `app/llm/mode_detector.py` | 写信/问答开始短语和收件人模板识别 |
+| `app/llm/session.py` | 收件人、转录缓冲、控制语、限制、Prompt 和超时状态机 |
+| `app/llm/client.py` | OpenAI-compatible 请求、环境变量 API Key 和稳定错误 |
+
+### 13.6 Runtime
 
 | 文件 | 职责 |
 | --- | --- |
 | `app/runtime/__init__.py` | 导出 `PerceptionDaemon` |
 | `app/runtime/perception_daemon.py` | 三任务并发、语句队列、metrics、事件缓存和事件日志 |
 
-### 13.6 控制、功能与 API
+### 13.7 控制、功能与 API
 
 | 文件 | 职责 |
 | --- | --- |
@@ -778,7 +808,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `app/features/thermal_printer.py` | 灰度像素化、1-bit 位图打包、分块和打印机 HTTP 客户端 |
 | `app/api/server.py` | health、state、历史事件、照片和 WebSocket 接口 |
 
-### 13.7 Transport
+### 13.8 Transport
 
 | 文件 | 职责 |
 | --- | --- |
@@ -786,7 +816,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `app/transport/sources.py` | 定义可替换的 `AudioFrameSource` 和 `ImageFrameSource` 接口 |
 | `app/transport/hardware_sources.py` | TCP PCM server、HTTP JPEG server、协议校验、帧转换、重连和最新图覆盖 |
 
-### 13.8 Vision
+### 13.9 Vision
 
 | 文件 | 职责 |
 | --- | --- |
@@ -798,7 +828,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `app/vision/continuous_processor.py` | FPS 限制、解码、识别、过滤、稳定和视觉事件构造 |
 | `app/vision/mock_backend.py` | 测试用的手势结果序列 |
 
-### 13.9 仓库根目录和辅助文件
+### 13.10 仓库根目录和辅助文件
 
 | 文件 | 职责 |
 | --- | --- |
@@ -813,6 +843,8 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `tests/test_vad_stream.py` | VAD 断句、静音、最长语句和真实 Silero smoke test |
 | `tests/test_perception_runtime.py` | 关键词、缓存、音频主链路和视觉稳定事件测试 |
 | `tests/test_thermal_printer.py` | 打印图像、位图位序、分块和 HTTP 协议测试 |
+| `tests/test_llm_session.py` | LLM 模式检测、会话、控制语、限制和超时测试 |
+| `tests/test_llm_client.py` | OpenAI-compatible HTTP、响应和专用日志测试 |
 
 ## 14. 当前边界和后续接入点
 
