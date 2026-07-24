@@ -21,9 +21,12 @@ const DEFAULT_TURTLE_GAME = {
   loading: false
 };
 
+const MATCH_INTEREST_OPTIONS = ["AI", "机器人", "ESP32", "摄影", "游戏", "阅读", "音乐", "旅行", "手帐", "插画", "开源", "自然", "生活", "猫"];
+
 const ui = {
   category: "全部",
   query: "",
+  matchPreferences: ["AI", "机器人", "阅读"],
   letterBox: "inbox",
   selectedLetterId: null,
   simulatorConnected: false,
@@ -599,12 +602,35 @@ function scoreRing(score) {
   return `<span class="score-ring" style="--score:${score}"><strong>${score}%</strong><small>MATCH</small></span>`;
 }
 
+function preferenceAdjustedMatch(match) {
+  const selected = new Set(ui.matchPreferences);
+  const interests = match.user.interests ?? [];
+  const skills = match.user.skills ?? [];
+  const hits = [...new Set([...interests, ...skills].filter((item) => selected.has(item)))];
+  if (!selected.size) return { ...match, preferenceHits: hits };
+  const missPenalty = Math.max(0, selected.size - hits.length) * 4;
+  const score = Math.max(45, Math.min(99, match.score + hits.length * 5 - missPenalty));
+  return { ...match, score, preferenceHits: hits };
+}
+
+function matchPreferencePanel() {
+  const selected = new Set(ui.matchPreferences);
+  return `<article class="match-preferences">
+    <div class="match-preferences-head"><div><p class="eyebrow">PREFERENCES</p><h2>偏好设置</h2></div><button type="button" class="text-button" data-match-pref-clear>清空</button></div>
+    <div class="preference-chip-list">
+      ${MATCH_INTEREST_OPTIONS.map((item) => `<button type="button" data-match-pref="${escapeHtml(item)}" class="${selected.has(item) ? "active" : ""}">${escapeHtml(item)}</button>`).join("")}
+    </div>
+  </article>`;
+}
+
 async function matchView() {
   const data = await api.matches();
+  const matches = data.items.map(preferenceAdjustedMatch).sort((left, right) => right.score - left.score || (right.preferenceHits?.length ?? 0) - (left.preferenceHits?.length ?? 0));
   return `<section class="page match-page" id="match-view">
     ${pageHead("FIND YOUR PEOPLE", "遇见可能聊得来的人", "看看今天想和谁写一封信。")}
+    ${matchPreferencePanel()}
     <div class="match-grid">
-      ${data.items.map((match) => `<article class="match-card" data-match-card="${match.user.id}">
+      ${matches.map((match) => `<article class="match-card" data-match-card="${match.user.id}">
         <div class="match-card-art art-${match.user.id.split("-").at(-1)}"><span class="country-code">${match.user.countryCode}</span>${avatar(match.user, "hero")}<i></i><i></i></div>
         <div class="match-card-body">
           <div class="match-person"><div><h2>${escapeHtml(match.user.displayName)}</h2><p>@${escapeHtml(match.user.handle)} · ${escapeHtml(match.user.city)}, ${escapeHtml(match.user.country)}</p></div>${scoreRing(match.score)}</div>
@@ -1670,6 +1696,18 @@ function wire() {
     sessionStorage.setItem("aihub-recipient", element.dataset.writeTo);
     navigate("/letter/create");
   }));
+  document.querySelectorAll("[data-match-pref]").forEach((element) => element.addEventListener("click", () => {
+    const value = element.dataset.matchPref;
+    const next = new Set(ui.matchPreferences);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    ui.matchPreferences = [...next];
+    render();
+  }));
+  document.querySelector("[data-match-pref-clear]")?.addEventListener("click", () => {
+    ui.matchPreferences = [];
+    render();
+  });
   document.querySelectorAll("[data-follow-user]").forEach((element) => element.addEventListener("click", async () => {
     await api.matchFeedback(element.dataset.followUser, "FOLLOWED");
     toast("已关注，未来会在首页看到更多动态", "success");
