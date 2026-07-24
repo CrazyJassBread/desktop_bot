@@ -72,6 +72,7 @@ class KeywordConfig:
     write_letter: list[str] = field(
         default_factory=lambda: ["帮我写信", "我要写一封信"]
     )
+    custom: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -100,6 +101,25 @@ class VisionConfig:
 
 
 @dataclass
+class ApplicationConfig:
+    default_language: str = "zh"
+    photo_enabled: bool = True
+    photo_delay_seconds: float = 2.0
+    photo_frame_max_age_seconds: float = 1.0
+    photo_output_dir: str = "captured_photos"
+    photo_processor_url: str = ""
+    downstream_timeout_seconds: float = 10.0
+
+
+@dataclass
+class APIConfig:
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8090
+    websocket_path: str = "/api/events"
+
+
+@dataclass
 class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     asr: ASRConfig = field(default_factory=ASRConfig)
@@ -108,6 +128,8 @@ class AppConfig:
     keywords: KeywordConfig = field(default_factory=KeywordConfig)
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
+    application: ApplicationConfig = field(default_factory=ApplicationConfig)
+    api: APIConfig = field(default_factory=APIConfig)
 
 
 _SECTIONS: dict[str, type[Any]] = {
@@ -118,6 +140,8 @@ _SECTIONS: dict[str, type[Any]] = {
     "keywords": KeywordConfig,
     "perception": PerceptionConfig,
     "vision": VisionConfig,
+    "application": ApplicationConfig,
+    "api": APIConfig,
 }
 
 
@@ -214,6 +238,20 @@ def _validate(config: AppConfig) -> None:
             isinstance(item, str) and item.strip() for item in phrases
         ):
             raise ConfigurationError(f"{name} must contain non-empty strings")
+    if not isinstance(config.keywords.custom, dict):
+        raise ConfigurationError("keywords.custom must be a mapping")
+    for command_type, phrases in config.keywords.custom.items():
+        if (
+            not isinstance(command_type, str)
+            or not command_type.strip()
+            or not isinstance(phrases, list)
+            or not all(
+                isinstance(item, str) and item.strip() for item in phrases
+            )
+        ):
+            raise ConfigurationError(
+                "keywords.custom must map command names to phrase lists"
+            )
     for name, value in (
         ("vision.image_width", config.vision.image_width),
         ("vision.image_height", config.vision.image_height),
@@ -232,6 +270,37 @@ def _validate(config: AppConfig) -> None:
         raise ConfigurationError("invalid vision mode temporal filter")
     if config.vision.gesture_required_hits > config.vision.gesture_window_size:
         raise ConfigurationError("invalid vision gesture temporal filter")
+    if config.application.default_language not in {"zh", "en"}:
+        raise ConfigurationError(
+            "application.default_language must be 'zh' or 'en'"
+        )
+    _positive(
+        config.application.photo_delay_seconds,
+        "application.photo_delay_seconds",
+    )
+    _positive(
+        config.application.photo_frame_max_age_seconds,
+        "application.photo_frame_max_age_seconds",
+    )
+    _positive(
+        config.application.downstream_timeout_seconds,
+        "application.downstream_timeout_seconds",
+    )
+    if not config.application.photo_output_dir.strip():
+        raise ConfigurationError(
+            "application.photo_output_dir cannot be empty"
+        )
+    if isinstance(config.api.port, bool) or not isinstance(config.api.port, int):
+        raise ConfigurationError("api.port must be an integer")
+    if not 1 <= config.api.port <= 65_535:
+        raise ConfigurationError("api.port must be between 1 and 65535")
+    if config.api.port in {
+        config.hardware.audio_port,
+        config.hardware.vision_port,
+    }:
+        raise ConfigurationError("api port must differ from hardware ports")
+    if not config.api.websocket_path.startswith("/"):
+        raise ConfigurationError("api.websocket_path must start with '/'")
     if not isinstance(config.asr.mock_transcripts, dict) or not all(
         isinstance(key, str) and isinstance(value, str)
         for key, value in config.asr.mock_transcripts.items()

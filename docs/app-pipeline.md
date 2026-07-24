@@ -23,8 +23,8 @@ flowchart LR
     UtteranceQueue --> ASR["Faster Whisper"]
     ASR -->|"每条 transcript"| ASRLog["CLI + logs/perception.log"]
     ASR --> Keyword["KeywordDetector"]
-    Keyword -->|"未命中"| Discard["丢弃，不写事件缓存"]
-    Keyword -->|"命中"| AudioEvent["音频 PerceptionEvent"]
+    Keyword -->|"所有非空转写"| Transcript["speech.transcribed"]
+    Keyword -->|"命中"| AudioEvent["音频意图 PerceptionEvent"]
 
     Camera["Bot Vision 固件"] -->|"HTTP JPEG :8081/upload"| ImageSource["HTTPJPEGImageSource"]
     ImageSource -->|"只保留最新 ImageRequest"| Decode["JPEG 校验与 RGB 解码"]
@@ -35,6 +35,11 @@ flowchart LR
 
     AudioEvent --> Cache["EventCache"]
     VisionEvent --> Cache
+    AudioEvent --> Controller["ApplicationController"]
+    VisionEvent --> Controller
+    Transcript --> Controller
+    Controller --> Command["command.*"]
+    Command --> API["HTTP / WebSocket API"]
     AudioEvent --> EventLog["CLI + logs/perception.log"]
     VisionEvent --> EventLog
 ```
@@ -122,7 +127,7 @@ sequenceDiagram
 
 ### 3.2 配置加载和验证
 
-`load_config()` 读取 YAML，并只接受以下七个顶层 section：
+`load_config()` 读取 YAML，并只接受以下九个顶层 section：
 
 | Section | 用途 |
 | --- | --- |
@@ -133,6 +138,8 @@ sequenceDiagram
 | `keywords` | 唤醒、聊天切换和写信关键词 |
 | `perception` | 事件缓存、语句队列和视觉 FPS |
 | `vision` | 图像约束、手势模型和稳定策略 |
+| `application` | 默认语言、延迟拍照、照片目录和下游地址 |
+| `api` | HTTP/WebSocket 接口地址和开关 |
 
 未知 section、未知字段和非法阈值会在服务器启动前抛出
 `ConfigurationError`。当前 Silero 流式输入被明确限制为：
@@ -428,8 +435,9 @@ INFO desktop_assistant.asr asr result {
 未命中任何关键词时：
 
 - ASR transcript 已经写入调试日志；
-- 不产生 `PerceptionEvent`；
-- 不写入 `EventCache`。
+- 产生 `speech.transcribed` 并写入 `EventCache`；
+- 未进入聊天时不产生功能命令；
+- 已进入聊天时产生 `command.chat.ask`。
 
 ## 8. 图像信号来源
 
@@ -547,12 +555,14 @@ GestureDetection(
 
 ### 9.4 GestureStabilizer
 
-单帧检测不会立即成为事件。当前只为两个 label 建立稳定策略：
+单帧检测不会立即成为事件。当前为四个 label 建立稳定策略：
 
 | Label | 窗口 | 所需命中 | 释放帧 | 最终事件 |
 | --- | ---: | ---: | ---: | --- |
-| `Victory` | 5 帧 | 至少 3 帧 | 2 帧 | `mode.toggle` |
+| `Victory` | 5 帧 | 至少 3 帧 | 2 帧 | `gesture.victory` |
 | `Thumb_Up` | 3 帧 | 至少 2 帧 | 2 帧 | `gesture.thumb_up` |
+| `Thumb_Down` | 3 帧 | 至少 2 帧 | 2 帧 | `gesture.thumb_down` |
+| `Open_Palm` | 3 帧 | 至少 2 帧 | 2 帧 | `gesture.open_palm` |
 
 一个手势触发后会进入 disarmed 状态。继续保持手势不会重复产生事件；必须连续缺失
 达到 `release_frames`，才会重新允许触发。
@@ -561,7 +571,7 @@ GestureDetection(
 
 ```json
 {
-  "event_type": "mode.toggle",
+  "event_type": "gesture.victory",
   "source": "vision",
   "timestamp_ms": 1784800000000,
   "session_id": "bot",
@@ -592,6 +602,7 @@ PerceptionEvent(
 
 音频：
 
+- `speech.transcribed`
 - `wake`
 - `mode.enter_chat`
 - `mode.exit_chat`
@@ -599,11 +610,14 @@ PerceptionEvent(
 
 视觉：
 
-- `mode.toggle`
+- `gesture.victory`
 - `gesture.thumb_up`
+- `gesture.thumb_down`
+- `gesture.open_palm`
 
-这些只是“检测到某个意图/手势”的事件。当前 Runtime 不会真正切换模式、调用
-LLM、生成信件或控制 Bot。
+控制器会进一步产生 `command.chat.*`、`command.language.set`、
+`command.camera.capture_after` 和其他 `command.*` 事件。Open Palm 会启动独立
+的 2 秒倒计时，保存届时最新 JPEG，并可通过 multipart HTTP 上传到照片处理程序。
 
 ### 10.2 EventCache
 
@@ -620,7 +634,7 @@ TTL：1800 秒（30 分钟）
 - 容量满后自动淘汰最旧事件；
 - 追加、读取、取长度时惰性删除过期事件；
 - 进程退出后全部丢失；
-- ASR 普通文本不进入缓存；
+- ASR 普通文本以 `speech.transcribed` 进入缓存；
 - 视觉单帧 detection 不进入缓存；
 - 原始 PCM、WAV、JPEG、RGB 都不进入缓存。
 
@@ -636,27 +650,30 @@ INFO desktop_assistant.perception perception event <JSON>
 
 ## 11. 最终输出汇总
 
-当前应用一共有四类可观察输出：
+当前应用的主要可观察输出：
 
 | 输出 | 接收方 | 内容 |
 | --- | --- | --- |
 | ASR result 日志 | CLI、`logs/perception.log` | 每条实际 ASR transcript，包括未命中关键词的文本 |
-| Perception event 日志 | CLI、`logs/perception.log` | 仅关键词命中或稳定视觉事件 |
-| EventCache | 当前 Python 进程 | 最近有效结构化事件 |
+| Perception event 日志 | CLI、`logs/perception.log` | 感知、命令和功能结果事件 |
+| EventCache | 当前 Python 进程、HTTP API | 最近结构化事件 |
 | HTTP response | Vision 固件 | 图片是否接收、字节数、是否覆盖旧帧或错误原因 |
+| WebSocket `/api/events` | 网站、功能程序 | 实时事件和 `command.*` |
+| HTTP `/api/events` | 网站、功能程序 | 按 sequence 补取历史事件 |
+| POST `/api/results` | 聊天和其他功能程序 | 回传回答、任务状态和功能结果 |
+| HTTP `/api/photos/{id}.jpg` | 网站、功能程序 | Open Palm 拍摄的 JPEG |
 
 TCP 音频发送端当前不会收到识别文本或业务响应。
 
-当前明确没有以下输出：
+尚未内置以下业务实现：
 
-- LLM 回答；
+- LLM 回答（已提供 `command.chat.*` 接口）；
 - TTS 音频；
-- UI action；
-- 模式状态持久化；
+- 状态持久化；
 - 信件草稿；
 - 设备控制指令；
 - 数据库或 JSON 事件文件；
-- 原始音频/图像自动落盘。
+- 原始音频自动落盘（Open Palm 触发的照片会落盘）。
 
 ## 12. Metrics 和 health
 
@@ -670,6 +687,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `asr_calls` | ASR 调用次数 |
 | `asr_errors` | ASR 错误次数 |
 | `keyword_hits` | 关键词命中并产生事件的次数 |
+| `speech_transcripts` | 非空 ASR 转写事件数 |
 | `vision_frames_received` | Vision task 从最新帧队列取得的图片数 |
 | `vision_frames_processed` | 已完成处理的图片数 |
 | `vision_errors` | 图片校验或推理错误数 |
@@ -681,8 +699,8 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 - 当前缓存事件数量；
 - 当前完整语句队列长度。
 
-目前没有 HTTP health endpoint。停止 Runtime 时，最终 health 会写入日志；代码中
-也可以直接调用 `daemon.health()`。
+启用 `api.enabled` 后，`GET /api/health` 返回这些数据，
+`GET /api/state` 返回当前聊天、语言和拍照状态。
 
 ## 13. 文件职责
 
@@ -715,7 +733,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | --- | --- |
 | `app/audio/__init__.py` | Audio 子包说明并导出 `AudioData` |
 | `app/audio/stream_pipeline.py` | pre-roll、语音起点、连续静音终点、最短/最长语句和 `AudioData` 组装 |
-| `app/audio/keyword_asr.py` | 调用 ASR、记录每条 transcript、执行关键词门控、构造音频事件 |
+| `app/audio/keyword_asr.py` | 调用 ASR、记录并保留 transcript、构造关键词意图事件 |
 | `app/audio/vad/__init__.py` | 导出 VAD 公共接口 |
 | `app/audio/vad/base.py` | 定义帧级 `VADBackend` 和 `VADError` |
 | `app/audio/vad/silero_backend.py` | Silero v6 ONNX 状态、帧校验、概率推理和 reset |
@@ -735,7 +753,16 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `app/runtime/__init__.py` | 导出 `PerceptionDaemon` |
 | `app/runtime/perception_daemon.py` | 三任务并发、语句队列、metrics、事件缓存和事件日志 |
 
-### 13.6 Transport
+### 13.6 控制、功能与 API
+
+| 文件 | 职责 |
+| --- | --- |
+| `app/control/application_controller.py` | 聊天状态、语言状态和感知事件到功能命令的路由 |
+| `app/events/event_bus.py` | 对网站和其他消费者广播实时事件 |
+| `app/features/photo_capture.py` | 最新帧存储、2 秒异步拍照、本地原子保存和下游上传 |
+| `app/api/server.py` | health、state、历史事件、照片和 WebSocket 接口 |
+
+### 13.7 Transport
 
 | 文件 | 职责 |
 | --- | --- |
@@ -743,7 +770,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `app/transport/sources.py` | 定义可替换的 `AudioFrameSource` 和 `ImageFrameSource` 接口 |
 | `app/transport/hardware_sources.py` | TCP PCM server、HTTP JPEG server、协议校验、帧转换、重连和最新图覆盖 |
 
-### 13.7 Vision
+### 13.8 Vision
 
 | 文件 | 职责 |
 | --- | --- |
@@ -755,7 +782,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `app/vision/continuous_processor.py` | FPS 限制、解码、识别、过滤、稳定和视觉事件构造 |
 | `app/vision/mock_backend.py` | 测试用的手势结果序列 |
 
-### 13.8 仓库根目录和辅助文件
+### 13.9 仓库根目录和辅助文件
 
 | 文件 | 职责 |
 | --- | --- |
@@ -772,17 +799,19 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 
 ## 14. 当前边界和后续接入点
 
-后续功能应消费 `PerceptionEvent`，不要直接进入 Transport、VAD、ASR 或 Vision
-内部。
+后续功能应消费 `command.*`，不要直接进入 Transport、VAD、ASR 或 Vision
+内部。当前聊天实现方消费 `command.chat.start/ask/stop`，照片处理程序由
+`application.photo_processor_url` 接收 multipart JPEG，网站消费 WebSocket。
 
 推荐扩展方向：
 
 ```mermaid
 flowchart LR
-    Event["PerceptionEvent"] --> Dispatcher["未来 Event Dispatcher"]
-    Dispatcher -->|"wake / mode.enter_chat"| Chat["LLM Chat Feature"]
-    Dispatcher -->|"feature.write_letter"| Letter["Letter Feature"]
-    Dispatcher -->|"gesture.*"| Device["Device Action Adapter"]
+    Event["PerceptionEvent"] --> Dispatcher["ApplicationController"]
+    Dispatcher -->|"command.chat.*"| Chat["LLM Chat Feature"]
+    Dispatcher -->|"command.letter.compose"| Letter["Letter Feature"]
+    Dispatcher -->|"command.camera.*"| Photo["AI Photo Feature"]
+    Dispatcher -->|"command.language.set"| Web["Website / UI"]
 ```
 
 当前值得注意的边界：

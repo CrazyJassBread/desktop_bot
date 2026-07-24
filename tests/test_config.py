@@ -11,6 +11,9 @@ def test_config_defaults():
     assert config.hardware.vision_port == 8081
     assert config.keywords.wake
     assert config.perception.vision_max_fps == 5
+    assert config.application.photo_delay_seconds == 2
+    assert config.application.default_language == "zh"
+    assert config.api.port == 8090
 
 
 def test_repository_config_loads():

@@ -85,7 +85,7 @@ class ContinuousVisionProcessor:
             events = tuple(
                 PerceptionEvent(
                     event_type=(
-                        "mode.toggle" if label == "Victory"
+                        "gesture.victory" if label == "Victory"
                         else f"gesture.{label.casefold()}"
                     ),
                     source="vision",

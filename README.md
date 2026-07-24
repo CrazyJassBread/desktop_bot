@@ -1,15 +1,18 @@
 # AI Bot 持续感知服务
 
-这是一个面向 Bot 硬件的轻量多模态感知进程。当前只负责持续接收音频和图像，
-产生有意义的结构化事件：
+这是一个面向 Bot 硬件的轻量多模态感知与功能控制进程。它持续接收音频和图像，
+产生结构化事件，并把事件路由为聊天、拍照和语言切换命令：
 
 ```text
-TCP PCM → Silero VAD → Faster Whisper → 关键词检测 → EventCache
-HTTP JPEG → 最新帧 → MediaPipe → 手势稳定检测 → EventCache
+TCP PCM → VAD → ASR → 关键词/聊天路由 ┐
+                                       ├→ ApplicationController → WebSocket
+HTTP JPEG → MediaPipe → 稳定手势 ──────┘                       ├→ 功能程序
+Open Palm → 异步等待 2 秒 → 最新 JPEG → AI 照片处理程序         └→ 网站
 ```
 
-普通闲聊、静音、无效语音和未稳定的视觉结果不会进入缓存。LLM、写信和设备动作
-将在后续作为 `PerceptionEvent` 消费者接入。
+未进入聊天时，普通转写只作为 `speech.transcribed` 事件保留而不触发功能；进入
+聊天后，普通转写会成为 `command.chat.ask`。网站和其他程序可以通过
+`ws://<bot>:8090/api/events` 实时消费事件。
 
 文档：
 
@@ -65,6 +68,31 @@ python -m app --vision-only
 python -m app test
 ```
 
+## 功能团队接入
+
+默认 API 监听 `8090`：
+
+```text
+GET /api/health
+GET /api/state
+GET /api/events?after_sequence=0
+WS  /api/events
+POST /api/results
+GET /api/photos/{capture_id}.jpg
+```
+
+聊天程序订阅 `command.chat.start`、`command.chat.ask` 和
+`command.chat.stop`；网站订阅 `language.changed`、`photo.captured`、
+`photo.completed` 以及聊天程序返回的结果事件。事件都带有 `event_id`、
+`sequence` 和 `schema_version`，消费方应按 `event_id` 去重。
+功能程序完成任务后向 `/api/results` 提交 `event_type`、`session_id` 和
+`payload`，结果会进入同一事件流并实时推送给网站。
+
+AI 照片程序的 multipart HTTP 地址配置在
+`application.photo_processor_url`。请求包含 `metadata` JSON、`image` JPEG 和
+`Idempotency-Key: <capture_id>`。如果暂时不配置地址，照片仍会原子保存到
+`application.photo_output_dir` 并产生可供网站获取的事件。
+
 该模式只启动 Vision 接收端，不启动 Audio Runtime。窗口显示最新画面、单帧手势、
 置信度和稳定事件。按 `q`、`Esc` 或关闭窗口退出。可通过 `--scale 1.5` 调整
 窗口尺寸。
@@ -107,7 +135,7 @@ python -m scripts.receive_images
 
 ## 配置
 
-[config.yaml](config.yaml) 只包含当前运行时真正使用的七部分：
+[config.yaml](config.yaml) 包含当前运行时使用的九部分：
 
 - `audio`：采样率；
 - `asr`：Faster Whisper 模型和推理设备；
@@ -116,9 +144,14 @@ python -m scripts.receive_images
 - `keywords`：唤醒、模式切换和写信关键词；
 - `perception`：事件缓存、语句队列和视觉 FPS；
 - `vision`：MediaPipe 模型、尺寸和稳定检测策略。
+- `application`：默认语言、2 秒拍照、照片目录和下游处理地址；
+- `api`：HTTP/WebSocket 集成接口。
 
-当前是 ASR 后关键词检测，因此每段有效人声都会执行一次 ASR，但只有命中词才
-留下事件。未来可以在相同事件边界前增加专用 KWS，降低常态计算量。
+尚未确定的语音入口可以添加到 `keywords.custom`。例如
+`music.open: [打开音乐]` 会输出 `command.music.open`，不需要修改 ASR。
+
+当前是 ASR 后关键词检测，因此每段有效人声都会执行一次 ASR。关键词负责开启或
+退出功能；聊天模式中的普通转写会被路由给聊天处理程序。
 
 ## 测试
 
@@ -150,10 +183,14 @@ app/
 ├── audio/
 │   └── vad/
 ├── detection/
+├── control/
+├── events/
+├── features/
+├── api/
 ├── vision/
 ├── transport/
 └── runtime/
 ```
 
-未来功能应消费 `PerceptionEvent`，不要让 LLM 或业务逻辑反向依赖硬件协议、
+后续功能应消费 `command.*` 事件，不要让 LLM 或业务逻辑反向依赖硬件协议、
 VAD、ASR 或视觉模型。

@@ -11,9 +11,12 @@ from app.audio.keyword_asr import KeywordASRProcessor
 from app.audio.stream_pipeline import StreamingAudioPipeline
 from app.audio.vad.base import VADError
 from app.config import AppConfig, ConfigurationError, load_config
+from app.control.application_controller import ApplicationController
 from app.detection.keywords import KeywordDetector
 from app.event_cache import EventCache
+from app.events.event_bus import EventBus
 from app.factories import build_asr, build_gesture, build_vad, setup_logging
+from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
 from app.runtime.perception_daemon import PerceptionDaemon
 from app.transport.hardware_sources import (
     HTTPJPEGImageSource,
@@ -74,6 +77,9 @@ def build_daemon(
     image_source = None
     vision_processor = None
     gesture_backend: GestureBackend | None = None
+    event_bus = EventBus(config.perception.event_cache_capacity)
+    latest_frame_store = LatestFrameStore()
+    photo_manager = None
 
     if audio_enabled:
         if not config.vad.enabled:
@@ -123,6 +129,24 @@ def build_daemon(
             config.perception,
             gesture_backend,
         )
+        if config.application.photo_enabled:
+            photo_manager = PhotoCaptureManager(
+                latest_frame_store,
+                delay_seconds=config.application.photo_delay_seconds,
+                max_frame_age_seconds=(
+                    config.application.photo_frame_max_age_seconds
+                ),
+                output_dir=config.application.photo_output_dir,
+                processor_url=config.application.photo_processor_url,
+                timeout_seconds=(
+                    config.application.downstream_timeout_seconds
+                ),
+            )
+
+    controller = ApplicationController(
+        default_language=config.application.default_language,
+        photo_manager=photo_manager,
+    )
 
     daemon = PerceptionDaemon(
         cache,
@@ -132,6 +156,9 @@ def build_daemon(
         image_source=image_source,
         vision_processor=vision_processor,
         utterance_queue_size=config.perception.utterance_queue_size,
+        event_bus=event_bus,
+        application_controller=controller,
+        latest_frame_store=latest_frame_store,
     )
     return daemon, gesture_backend
 
@@ -140,14 +167,36 @@ async def run(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     setup_logging()
     daemon, gesture_backend = build_daemon(config, args)
-    LOGGER.info(
-        "perception runtime starting audio=%s vision=%s",
-        daemon.audio_source is not None,
-        daemon.image_source is not None,
-    )
+    api_server = None
     try:
+        if config.api.enabled:
+            from app.api.server import EventAPIServer
+
+            controller = daemon.application_controller
+            assert isinstance(controller, ApplicationController)
+            api_server = EventAPIServer(
+                host=config.api.host,
+                port=config.api.port,
+                websocket_path=config.api.websocket_path,
+                cache=daemon.cache,
+                event_bus=daemon.event_bus,
+                controller=controller,
+                health=daemon.health,
+                emit=daemon.emit,
+                photo_output_dir=Path(config.application.photo_output_dir),
+            )
+            await api_server.start()
+        LOGGER.info(
+            "perception runtime starting audio=%s vision=%s",
+            daemon.audio_source is not None,
+            daemon.image_source is not None,
+        )
         await daemon.run()
     finally:
+        if api_server is not None:
+            await api_server.stop()
+        if daemon.application_controller is not None:
+            await daemon.application_controller.aclose()
         if gesture_backend is not None:
             await gesture_backend.close()
         LOGGER.info("perception runtime stopped health=%s", daemon.health())

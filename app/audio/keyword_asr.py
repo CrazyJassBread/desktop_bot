@@ -1,4 +1,4 @@
-"""ASR followed by a strict keyword gate."""
+"""ASR transcription plus optional keyword intent detection."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class KeywordASRProcessor:
         self.detector = detector
         self.session_id = session_id
 
-    async def process(self, utterance: AudioData) -> PerceptionEvent | None:
+    async def process(self, utterance: AudioData) -> tuple[PerceptionEvent, ...]:
         transcript = (await self.asr.transcribe(utterance)).strip()
         match = self.detector.detect(transcript)
         LOGGER.info(
@@ -48,9 +48,22 @@ class KeywordASRProcessor:
                 ensure_ascii=False,
             ),
         )
+        if not transcript:
+            return ()
+        duration = round(utterance.duration_seconds, 3)
+        transcript_event = PerceptionEvent(
+            event_type="speech.transcribed",
+            source="audio",
+            session_id=self.session_id,
+            payload={
+                "transcript": transcript,
+                "audio_duration_seconds": duration,
+                "matched_event": match.event_type if match else None,
+            },
+        )
         if match is None:
-            return None
-        return PerceptionEvent(
+            return (transcript_event,)
+        intent_event = PerceptionEvent(
             event_type=match.event_type,
             source="audio",
             session_id=self.session_id,
@@ -58,9 +71,9 @@ class KeywordASRProcessor:
                 "keyword": match.keyword,
                 "transcript": match.transcript,
                 "payload_text": match.payload_text,
-                "audio_duration_seconds": round(
-                    utterance.duration_seconds,
-                    3,
-                ),
+                "audio_duration_seconds": duration,
             },
         )
+        # Route the explicit intent first. The transcript remains observable, but
+        # the application controller can avoid treating it as a second chat turn.
+        return (intent_event, transcript_event)
