@@ -39,28 +39,28 @@ def test_repository_config_loads():
 
 
 def test_config_rejects_wrong_type(tmp_path):
-    path = tmp_path / "config.yaml"
+    path = tmp_path / "app.yaml"
     path.write_text("audio:\n  target_sample_rate: sixteen\n", encoding="utf-8")
     with pytest.raises(ConfigurationError):
         load_config(path)
 
 
 def test_config_rejects_unknown_section(tmp_path):
-    path = tmp_path / "config.yaml"
+    path = tmp_path / "app.yaml"
     path.write_text("llm:\n  backend: mock\n", encoding="utf-8")
     with pytest.raises(ConfigurationError):
         load_config(path)
 
 
 def test_config_rejects_unknown_option(tmp_path):
-    path = tmp_path / "config.yaml"
+    path = tmp_path / "app.yaml"
     path.write_text("audio:\n  surprise: true\n", encoding="utf-8")
     with pytest.raises(ConfigurationError):
         load_config(path)
 
 
 def test_config_rejects_conflicting_hardware_ports(tmp_path):
-    path = tmp_path / "config.yaml"
+    path = tmp_path / "app.yaml"
     path.write_text(
         "hardware:\n  audio_port: 8080\n  vision_port: 8080\n",
         encoding="utf-8",
@@ -85,7 +85,7 @@ def test_config_rejects_conflicting_hardware_ports(tmp_path):
     ],
 )
 def test_config_rejects_invalid_printer_settings(tmp_path, body):
-    path = tmp_path / "config.yaml"
+    path = tmp_path / "app.yaml"
     path.write_text(body, encoding="utf-8")
 
     with pytest.raises(ConfigurationError):
@@ -170,7 +170,7 @@ api_key: sentinel-secret
     ],
 )
 def test_config_rejects_invalid_llm_settings(tmp_path, llm_body):
-    path = tmp_path / "config.yaml"
+    path = tmp_path / "app.yaml"
     path.write_text(f"llm:\n  {llm_body}", encoding="utf-8")
 
     with pytest.raises(ConfigurationError):

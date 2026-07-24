@@ -86,6 +86,7 @@ python -m app test
 ```text
 [run | test]
 --config PATH
+--llm-config PATH
 --session SESSION_ID
 --audio-only
 --vision-only
@@ -97,7 +98,8 @@ python -m app test
 ```
 
 `--audio-only` 和 `--vision-only` 互斥。命令行地址、端口和 session 会覆盖
-`config.yaml` 中相应值。`--scale` 只影响 `test` 模式的显示窗口。
+`config/app.yaml` 中相应值。`--llm-config` 默认为被 Git 忽略的
+`config/llm.yaml`。`--scale` 只影响 `test` 模式的显示窗口。
 
 ## 3. 启动阶段
 
@@ -118,16 +120,16 @@ sequenceDiagram
     Shell->>Entry: python -m app
     Entry->>Main: main()
     Main->>Main: 解析 CLI 参数
-    Main->>Config: load_config(config.yaml)
-    Config-->>Main: AppConfig
     Main->>Factory: setup_logging()
+    Main->>Config: load_config(config/app.yaml, config/llm.yaml)
+    Config-->>Main: AppConfig
     Main->>Factory: 构造 VAD / ASR / Gesture backend
     Main->>Daemon: 构造并运行 run()
 ```
 
 ### 3.2 配置加载和验证
 
-`load_config()` 读取 YAML，并只接受以下九个顶层 section：
+`load_config()` 读取公开应用 YAML，并只接受以下十一个顶层 section：
 
 | Section | 用途 |
 | --- | --- |
@@ -139,10 +141,14 @@ sequenceDiagram
 | `perception` | 事件缓存、语句队列和视觉 FPS |
 | `vision` | 图像约束、手势模型和稳定策略 |
 | `application` | 默认语言、延迟拍照、照片目录和下游地址 |
+| `printer` | 热敏打印机、图像处理和冷却参数 |
+| `llm` | LLM 开关、会话规则、提示和模式短语 |
 | `api` | HTTP/WebSocket 接口地址和开关 |
 
-未知 section、未知字段和非法阈值会在服务器启动前抛出
-`ConfigurationError`。当前 Silero 流式输入被明确限制为：
+LLM 启用时，加载器再合并 `config/llm.yaml` 中严格限定的 `base_url`、`model`
+和 `api_key`。私密文件缺失不会阻止启动；已有但格式错误、字段未知或值为空会在
+服务器启动前抛出 `ConfigurationError`。公开配置中的未知 section、未知字段和
+非法阈值同样会被拒绝。当前 Silero 流式输入被明确限制为：
 
 - `audio.target_sample_rate = 16000`；
 - `hardware.audio_frame_samples = 512`。
@@ -648,11 +654,17 @@ Content-Type: application/octet-stream
 - `llm.transcript_buffered`
 - `llm.session_cancelled`
 - `llm.session_failed`
+- `llm.session_rejected`
 - `llm.letter_completed`
 - `llm.answer_completed`
 
-API Key 只从 `llm.api_key_env` 指定的环境变量读取。原始片段、输出、耗时和错误写入
-独立轮转日志 `logs/llm.log`，不记录 API Key。阶段一不调用打印机。
+LLM Provider URL、模型名和 API Key 从被 Git 忽略的 `config/llm.yaml` 读取。
+API Key 不进入对象表示、事件或日志。原始片段、输出、耗时和错误写入独立轮转日志
+`logs/llm.log`。阶段一不调用打印机。
+
+私密文件缺失时，写信或问答开始事件产生 `llm.session_rejected`，reason 为
+`not_configured`；`llm.enabled: false` 时 reason 为 `disabled`。拒绝不会建立
+会话、缓存转录或影响拍照、打印、手势、ASR 和视觉处理。
 
 ### 10.2 EventCache
 
@@ -832,7 +844,9 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 
 | 文件 | 职责 |
 | --- | --- |
-| `config.yaml` | 当前默认运行配置 |
+| `config/app.yaml` | 可提交的默认运行配置和非敏感 LLM 行为 |
+| `config/llm.example.yaml` | 不含真实凭据的私密配置模板 |
+| `config/llm.yaml` | 被 Git 忽略的本地 Provider URL、模型和 API Key |
 | `requirements.txt` | NumPy、YAML、Whisper、ONNX Runtime、MediaPipe、OpenCV 和 Pillow 依赖 |
 | `requirements-dev.txt` | pytest 和 pytest-asyncio 测试依赖 |
 | `scripts/receive_microphone.py` | 固件诊断：直接收 PCM 并保存 `microphone.wav`，不走 VAD/ASR |
