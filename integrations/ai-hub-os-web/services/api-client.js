@@ -138,6 +138,10 @@ export const api = {
     method: "POST",
     headers: { "Idempotency-Key": idempotencyKey() }
   }),
+  printDailyBriefing: (id) => request(`/daily-briefings/${encodeURIComponent(id)}/print`, {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey() }
+  }),
   devices: () => request("/devices"),
   deviceStatus: (id) => request(`/devices/${encodeURIComponent(id)}/status`),
   updatePrintPolicy: (id, policy, version) => request(`/devices/${encodeURIComponent(id)}/print-policy`, {

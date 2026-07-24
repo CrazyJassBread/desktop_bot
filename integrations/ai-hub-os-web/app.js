@@ -299,11 +299,11 @@ function dailyBriefingCard(briefing) {
       <span><p class="eyebrow">${briefing.category === "finance" ? "MARKET" : "DAILY NEWS"}</p><h3>${escapeHtml(briefing.title)}</h3></span>
       <button type="button" class="mini-switch ${briefing.enabled ? "active" : ""}" data-briefing-toggle="${escapeHtml(briefing.id)}" data-enabled="${briefing.enabled ? "true" : "false"}">${briefing.enabled ? "ON" : "OFF"}</button>
     </header>
-    <label class="briefing-time">时间<input type="time" value="${escapeHtml(briefing.time)}" data-briefing-time="${escapeHtml(briefing.id)}"></label>
+    <label class="briefing-time">时间<span><input type="time" value="${escapeHtml(briefing.time)}" data-briefing-time="${escapeHtml(briefing.id)}"><button type="button" data-briefing-save-time="${escapeHtml(briefing.id)}">保存</button></span></label>
     <div class="briefing-source-list">
       ${DAILY_BRIEFING_SOURCE_OPTIONS.map((source) => `<button type="button" class="${sources.has(source) ? "active" : ""}" data-briefing-source="${escapeHtml(source)}" data-briefing-id="${escapeHtml(briefing.id)}">${escapeHtml(source)}</button>`).join("")}
     </div>
-    <footer><span>${briefing.delivery?.includes("printer") ? "应用 + 打印机" : "仅应用"}</span><button type="button" data-briefing-preview="${escapeHtml(briefing.id)}">${icon("printer", 14)}打印一次</button></footer>
+    <footer><span>${briefing.delivery?.includes("printer") ? "应用 + 打印机" : "仅应用"}</span><button type="button" data-briefing-print="${escapeHtml(briefing.id)}">${icon("printer", 14)}打印一次</button></footer>
   </article>`;
 }
 
@@ -1717,12 +1717,29 @@ function wire() {
       render();
     } catch (error) { toast(error.message, "error"); }
   }));
-  document.querySelectorAll("[data-briefing-time]").forEach((element) => element.addEventListener("change", async () => {
+  const saveBriefingTime = async (element) => {
+    if (!element?.value || element.dataset.lastSavedValue === element.value) return;
     try {
       await api.updateDailyBriefing(element.dataset.briefingTime, { time: element.value });
+      element.dataset.lastSavedValue = element.value;
       toast("推送时间已更新", "success");
       render();
     } catch (error) { toast(error.message, "error"); }
+  };
+  document.querySelectorAll("[data-briefing-time]").forEach((element) => {
+    element.dataset.lastSavedValue = element.value;
+    element.addEventListener("change", () => saveBriefingTime(element));
+    element.addEventListener("blur", () => saveBriefingTime(element));
+    element.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveBriefingTime(element);
+      }
+    });
+  });
+  document.querySelectorAll("[data-briefing-save-time]").forEach((button) => button.addEventListener("click", () => {
+    const input = document.querySelector(`[data-briefing-time="${CSS.escape(button.dataset.briefingSaveTime)}"]`);
+    saveBriefingTime(input);
   }));
   document.querySelectorAll("[data-briefing-source]").forEach((element) => element.addEventListener("click", async () => {
     try {
@@ -1735,10 +1752,12 @@ function wire() {
       render();
     } catch (error) { toast(error.message, "error"); }
   }));
-  document.querySelectorAll("[data-briefing-preview]").forEach((element) => element.addEventListener("click", async () => {
+  document.querySelectorAll("[data-briefing-print]").forEach((element) => element.addEventListener("click", async () => {
     try {
-      const result = await api.previewDailyBriefing(element.dataset.briefingPreview);
-      stagePrintable(result.printable.kind, result.printable.title, result.printable.content, {}, "每日推送内容已整理为 384px 热敏纸版本，请确认后打印。");
+      toast("正在发送每日推送到打印机…");
+      const result = await api.printDailyBriefing(element.dataset.briefingPrint);
+      toast(`每日推送已发送到打印机 · ${result.pageCount} 页`, "success");
+      render();
     } catch (error) { toast(error.message, "error"); }
   }));
 

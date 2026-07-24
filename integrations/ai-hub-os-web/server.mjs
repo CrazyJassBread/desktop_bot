@@ -2,7 +2,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleApiRequest } from "./api/mock-api.mjs";
+import { handleApiRequest, startDailyBriefingScheduler } from "./api/mock-api.mjs";
 
 const appRoot = fileURLToPath(new URL(".", import.meta.url));
 const port = Number.parseInt(process.env.PORT ?? "18000", 10);
@@ -116,7 +116,10 @@ server.listen(port, host, () => {
   console.log(`AI Hub OS Web + API MVP running at http://${host}:${port}`);
 });
 
+const dailyBriefingScheduler = startDailyBriefingScheduler();
+
 function shutdown() {
+  dailyBriefingScheduler.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5_000).unref();
 }

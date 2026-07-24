@@ -639,6 +639,96 @@ function dailyBriefingContent(briefing) {
   ].join("\n");
 }
 
+function localMinuteKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: process.env.TZ || "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date).reduce((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return {
+    dayKey: `${parts.year}-${parts.month}-${parts.day}`,
+    time: `${parts.hour}:${parts.minute}`
+  };
+}
+
+async function printDailyBriefingNow(briefing, { requestId = crypto.randomUUID(), source = "auto-daily-briefing" } = {}) {
+  const now = new Date().toISOString();
+  const job = {
+    id: `pj-${crypto.randomUUID()}`,
+    userId: me.id,
+    letterId: null,
+    deviceId: device.id,
+    title: briefing.title,
+    status: "PRINTING",
+    format: "thermal_58mm",
+    pageCount: 1,
+    createdAt: now,
+    finishedAt: null,
+    version: 1,
+    source,
+    briefingId: briefing.id
+  };
+  printJobs.unshift(job);
+  try {
+    const content = dailyBriefingContent(briefing);
+    const rendered = await renderThermalContentBatches({
+      kind: "note",
+      title: briefing.title,
+      content
+    });
+    job.pageCount = rendered.pageCount;
+    await dispatchPrinterFeed(3);
+    const batches = [];
+    for (const batch of rendered.batches) {
+      const dispatched = await dispatchPrinterBitmap(batch);
+      batches.push({ index: batch.index + 1, width: batch.width, height: batch.height, bitmapBytes: batch.bitmap.byteLength, endpoint: dispatched.endpoint });
+    }
+    await dispatchPrinterFeed(4).catch(() => null);
+    job.status = "SUCCESS";
+    job.finishedAt = new Date().toISOString();
+    job.version += 1;
+    briefing.lastRunAt = job.finishedAt;
+    return { job, success: true, pageCount: rendered.pageCount, batchCount: batches.length, requestId };
+  } catch (error) {
+    job.status = "FAILED_RETRYABLE";
+    job.error = error.message;
+    job.version += 1;
+    briefing.lastRunAt = new Date().toISOString();
+    return { job, success: false, error: error.message, requestId };
+  }
+}
+
+export function startDailyBriefingScheduler({ intervalMs = Number(process.env.DAILY_BRIEFING_TICK_MS ?? 30_000), logger = console } = {}) {
+  if (process.env.NODE_ENV === "test" || String(process.env.DAILY_BRIEFING_AUTO_PRINT ?? "true").toLowerCase() === "false") {
+    return { stop() {} };
+  }
+  const running = new Set();
+  const tick = () => {
+    const { dayKey, time } = localMinuteKey();
+    for (const briefing of dailyBriefings) {
+      if (!briefing.enabled || !briefing.delivery?.includes("printer") || briefing.time !== time) continue;
+      const runKey = `${briefing.id}:${dayKey}:${time}`;
+      if (briefing.lastRunKey === runKey || running.has(runKey)) continue;
+      briefing.lastRunKey = runKey;
+      running.add(runKey);
+      printDailyBriefingNow(briefing, { source: "scheduled-daily-briefing" })
+        .then((result) => logger.log?.(JSON.stringify({ level: result.success ? "info" : "error", event: "daily_briefing_print", briefing_id: briefing.id, job_id: result.job.id, status: result.job.status, error: result.error })))
+        .finally(() => running.delete(runKey));
+    }
+  };
+  const timer = setInterval(tick, Math.max(5_000, intervalMs));
+  timer.unref?.();
+  tick();
+  return { stop: () => clearInterval(timer), tick };
+}
+
 export function getMockState() {
   return { me, users, posts, matches, letters, device, printJobs, comments, dailyBriefings };
 }
@@ -859,6 +949,24 @@ export async function handleApiRequest(request, response, requestId) {
         },
         requestId
       }, requestId);
+      return true;
+    }
+
+    const dailyBriefingPrintMatch = path.match(/^\/daily-briefings\/([^/]+)\/print$/);
+    if (method === "POST" && dailyBriefingPrintMatch) {
+      const briefing = dailyBriefings.find((item) => item.id === dailyBriefingPrintMatch[1]);
+      if (!briefing) {
+        const issue = problem(404, "DAILY_BRIEFING_NOT_FOUND", "Daily briefing not found", "This automation does not exist.", requestId);
+        send(response, issue.status, issue.body, requestId);
+        return true;
+      }
+      const result = await printDailyBriefingNow(briefing, { requestId, source: "manual-daily-briefing" });
+      if (!result.success) {
+        const issue = problem(502, "DAILY_BRIEFING_PRINT_FAILED", "Daily briefing print failed", result.error, requestId);
+        send(response, issue.status, issue.body, requestId);
+        return true;
+      }
+      send(response, 202, result, requestId);
       return true;
     }
 
