@@ -7,6 +7,7 @@ import logging
 
 from app.asr.base import ASRBackend
 from app.detection.keywords import KeywordDetector
+from app.llm.mode_detector import LLMModeDetector
 from app.models import AudioData
 from app.perception_events import PerceptionEvent
 
@@ -20,14 +21,22 @@ class KeywordASRProcessor:
         detector: KeywordDetector,
         *,
         session_id: str = "bot",
+        llm_detector: LLMModeDetector | None = None,
     ) -> None:
         self.asr = asr
         self.detector = detector
         self.session_id = session_id
+        self.llm_detector = llm_detector
 
     async def process(self, utterance: AudioData) -> tuple[PerceptionEvent, ...]:
         transcript = (await self.asr.transcribe(utterance)).strip()
-        match = self.detector.detect(transcript)
+        match = (
+            self.llm_detector.detect(transcript)
+            if self.llm_detector is not None
+            else None
+        )
+        if match is None:
+            match = self.detector.detect(transcript)
         LOGGER.info(
             "asr result %s",
             json.dumps(

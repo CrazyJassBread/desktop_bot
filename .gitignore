@@ -19,6 +19,8 @@ tests/*
 !tests/test_vad_stream.py
 !tests/test_perception_runtime.py
 !tests/test_thermal_printer.py
+!tests/test_llm_session.py
+!tests/test_llm_client.py
 
 records/
 received_images/

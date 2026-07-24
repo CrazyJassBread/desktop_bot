@@ -12,12 +12,19 @@ from app.asr.base import ASRBackend
 from app.audio.keyword_asr import KeywordASRProcessor
 from app.audio.stream_pipeline import StreamingAudioPipeline
 from app.audio.vad.mock_backend import MockVADBackend
-from app.config import KeywordConfig, PerceptionConfig, VADConfig, VisionConfig
+from app.config import (
+    KeywordConfig,
+    PerceptionConfig,
+    VADConfig,
+    VisionConfig,
+    load_config,
+)
 from app.control.application_controller import ApplicationController
 from app.detection.keywords import KeywordDetector
 from app.event_cache import EventCache
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
 from app.features.thermal_printer import PrintResult, PrinterError
+from app.llm.mode_detector import LLMModeDetector
 from app.perception_events import PerceptionEvent
 from app.runtime.perception_daemon import PerceptionDaemon
 from app.models import AudioData, GestureDetection, ImageRequest
@@ -114,6 +121,30 @@ def test_custom_keyword_becomes_extensible_feature_command():
     assert match is not None
     assert match.event_type == "intent.music.open"
     assert match.payload_text == "播放爵士"
+
+
+@pytest.mark.asyncio
+async def test_llm_mode_detection_precedes_legacy_write_letter_keyword():
+    config = KeywordConfig(write_letter=["我要写信"])
+    processor = KeywordASRProcessor(
+        SequenceASR(["我要写信"]),
+        KeywordDetector(config),
+        llm_detector=LLMModeDetector(load_config().llm.modes),
+    )
+
+    events = await processor.process(
+        AudioData(
+            samples=np.zeros(512, dtype=np.float32),
+            sample_rate=16_000,
+            duration_seconds=0.032,
+        )
+    )
+
+    assert [event.event_type for event in events] == [
+        "llm.letter.start",
+        "speech.transcribed",
+    ]
+    assert events[1].payload["matched_event"] == "llm.letter.start"
 
 
 def test_event_cache_is_bounded_and_expires_old_events():
