@@ -96,9 +96,13 @@ export const api = {
     method: "POST",
     body: JSON.stringify({ transcript, context })
   }),
-  turtleSoup: (question) => request("/games/turtle-soup/answer", {
+  startTurtleSoup: (payload = {}) => request("/games/turtle-soup/start", {
     method: "POST",
-    body: JSON.stringify({ question })
+    body: JSON.stringify(payload)
+  }),
+  turtleSoup: (question, game = {}) => request("/games/turtle-soup/answer", {
+    method: "POST",
+    body: JSON.stringify({ question, story: game.story, history: game.history })
   }),
   ocr: (fileName) => request("/ai/ocr", {
     method: "POST",

@@ -301,6 +301,117 @@ function send(response, status, body, requestId, headers = {}) {
   response.end(status === 204 ? undefined : JSON.stringify(body));
 }
 
+function defaultTurtleSoup() {
+  return {
+    id: "turtle-morning-printer",
+    title: "午夜的纸条",
+    story: "女孩每天睡前都会确认打印机里没有纸。第二天早上，桌上却总会出现一张写着“今天也要记得吃早餐”的纸条。她检查了门窗，家里没有别人。",
+    truth: "她曾经让 AI 桌面助手每天早晨自动打印一句照顾自己的提醒。后来她忘记关闭定时任务，而热敏打印机里其实还留着一小段纸卷。",
+    rules: "你只能提出能用 YES / NO / 无关 / 接近 回答的问题，直到猜出汤底。",
+    difficulty: "warm-mystery"
+  };
+}
+
+function sanitizeTurtleStory(input = {}) {
+  const fallback = defaultTurtleSoup();
+  return {
+    id: String(input.id ?? fallback.id).slice(0, 80),
+    title: String(input.title ?? fallback.title).trim().slice(0, 80) || fallback.title,
+    story: String(input.story ?? fallback.story).trim().slice(0, 500) || fallback.story,
+    truth: String(input.truth ?? fallback.truth).trim().slice(0, 700) || fallback.truth,
+    rules: String(input.rules ?? fallback.rules).trim().slice(0, 240) || fallback.rules,
+    difficulty: String(input.difficulty ?? fallback.difficulty).trim().slice(0, 40) || fallback.difficulty
+  };
+}
+
+function localTurtleAnswer(question, storyInput, history = []) {
+  const story = sanitizeTurtleStory(storyInput);
+  const text = String(question ?? "").trim();
+  let verdict = "IRRELEVANT";
+  let answer = "这个方向和真相关系不大。";
+  let hint = "试着关注纸条是如何出现的。";
+  let solved = false;
+
+  if (/设备|打印机|AI|定时|提醒|自己|设置|自动|任务|纸卷|热敏/.test(text)) {
+    verdict = "YES";
+    answer = "是，这个方向是关键。";
+    hint = "继续想：是谁设置了它，又为什么她忘了？";
+  }
+  if (/陌生人|邻居|闯入|小偷|鬼|家人|别人/.test(text)) {
+    verdict = "NO";
+    answer = "不是，没有其他人进入房间。";
+    hint = "真相更像一个被忘记的自动化任务。";
+  }
+  if (/忘记|定时|自动.*打印|打印.*提醒|AI.*提醒|任务/.test(text)) {
+    verdict = "YES";
+    answer = "是，几乎猜到了。";
+    hint = "把“谁设置的”和“纸从哪里来”连起来，就是完整汤底。";
+    solved = history.length >= 1 || /纸卷|剩余|热敏/.test(text);
+  }
+  if (/汤底|答案|揭晓|真相|我猜/.test(text) && /定时|自动|提醒|打印/.test(text)) {
+    verdict = "YES";
+    answer = "是，你已经接近完整汤底。";
+    hint = story.truth;
+    solved = true;
+  }
+
+  return { verdict, answer, hint, solved };
+}
+
+async function createTurtleSoup({ theme = "AI 桌面设备与热敏打印机", tone = "温暖轻悬疑" } = {}) {
+  const fallback = defaultTurtleSoup();
+  try {
+    const completion = await deepSeekChat({
+      json: true,
+      maxTokens: 900,
+      temperature: 0.9,
+      messages: [
+        { role: "system", content: "你是海龟汤主持人。生成一个适合 AI 桌面设备、生活化、轻悬疑但不恐怖的海龟汤谜题。只输出 JSON，不要 markdown。字段：title, story, truth, rules, difficulty。story 不超过 160 字，truth 不超过 260 字。不要血腥、暴力、自残或违法细节。" },
+        { role: "user", content: `主题：${String(theme).slice(0, 120)}\n风格：${String(tone).slice(0, 80)}` }
+      ]
+    });
+    return {
+      ...sanitizeTurtleStory({ ...completion.content, id: `turtle-${crypto.randomUUID()}` }),
+      provider: "deepseek",
+      model: completion.model
+    };
+  } catch (error) {
+    return { ...fallback, provider: "local-fallback", model: null, providerError: error.code ?? "AI_PROVIDER_ERROR" };
+  }
+}
+
+async function answerTurtleSoup({ question, story, history = [] }) {
+  const safeStory = sanitizeTurtleStory(story);
+  const local = localTurtleAnswer(question, safeStory, history);
+  try {
+    const completion = await deepSeekChat({
+      json: true,
+      maxTokens: 700,
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: "你是海龟汤主持人。根据汤面、汤底和历史，只能判断用户问题。输出 JSON：verdict, answer, hint, solved。verdict 只能是 YES、NO、IRRELEVANT、CLOSE。answer 用中文，简短。不要直接泄露 truth，除非用户已经明确猜中。solved 只有用户基本说出完整真相时才为 true。" },
+        { role: "user", content: JSON.stringify({
+          story: safeStory.story,
+          truth: safeStory.truth,
+          history: history.slice(-10),
+          question: String(question).slice(0, 300)
+        }) }
+      ]
+    });
+    const verdict = ["YES", "NO", "IRRELEVANT", "CLOSE"].includes(completion.content?.verdict) ? completion.content.verdict : local.verdict;
+    return {
+      verdict,
+      answer: String(completion.content?.answer ?? local.answer).slice(0, 160),
+      hint: String(completion.content?.hint ?? local.hint).slice(0, 220),
+      solved: Boolean(completion.content?.solved),
+      provider: "deepseek",
+      model: completion.model
+    };
+  } catch (error) {
+    return { ...local, provider: "local-fallback", model: null, providerError: error.code ?? "AI_PROVIDER_ERROR" };
+  }
+}
+
 function printerBaseUrl() {
   const configured = process.env.ESP_PRINTER_BASE_URL ?? process.env.ESP32_PRINTER_BASE_URL;
   if (configured) return configured.replace(/\/+$/, "");
@@ -761,6 +872,13 @@ export async function handleApiRequest(request, response, requestId) {
       return true;
     }
 
+    if (method === "POST" && path === "/games/turtle-soup/start") {
+      const body = await readJson(request);
+      const game = await createTurtleSoup(body);
+      send(response, 200, { ...game, requestId }, requestId);
+      return true;
+    }
+
     if (method === "POST" && path === "/games/turtle-soup/answer") {
       const body = await readJson(request);
       const question = String(body.question ?? "").trim();
@@ -769,10 +887,17 @@ export async function handleApiRequest(request, response, requestId) {
         send(response, issue.status, issue.body, requestId);
         return true;
       }
-      let verdict = "IRRELEVANT";
-      if (/设备|打印机|AI|定时|提醒|自己|设置/.test(question)) verdict = "YES";
-      if (/陌生人|邻居|闯入|小偷|鬼|家人/.test(question)) verdict = "NO";
-      send(response, 200, { verdict, answer: { YES: "是", NO: "否", IRRELEVANT: "无关" }[verdict] }, requestId);
+      const result = await answerTurtleSoup({
+        question,
+        story: body.story,
+        history: Array.isArray(body.history) ? body.history : []
+      });
+      send(response, 200, {
+        ...result,
+        question,
+        answer: result.answer,
+        requestId
+      }, requestId);
       return true;
     }
 

@@ -50,6 +50,7 @@ export function getPerceptionStatus() {
       "wake", "mode.enter_chat", "mode.exit_chat", "feature.write_letter",
       "command.letter.send", "letter.listening", "letter.content_buffered",
       "letter.sending", "letter.sent", "letter.send_failed",
+      "turtle.started", "turtle.answered", "turtle.stopped",
       "mode.toggle", "gesture.thumb_up", "gesture.thumb_down", "gesture.open_palm"
     ],
     updatedAt: new Date().toISOString()

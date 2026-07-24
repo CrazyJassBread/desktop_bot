@@ -188,6 +188,60 @@ test("desktop_bot microphone buffers a Letter and over sends it exactly once", a
   assert.ok(results.some((entry) => entry.body?.payload?.idempotent_replay === true));
 });
 
+test("desktop_bot microphone can start and play turtle soup through the Web bridge", async () => {
+  const results = [];
+  const bridge = new DesktopBotBridge({
+    baseUrl: "http://desktop-bot.test:8090",
+    aiHubBaseUrl: "http://aihub.test:18000",
+    onEvent: () => {},
+    fetchImpl: async (url, options) => {
+      const body = options?.body ? JSON.parse(options.body) : null;
+      if (String(url).endsWith("/api/v1/games/turtle-soup/start")) {
+        return new Response(JSON.stringify({
+          id: "turtle-test",
+          title: "打印机的早晨",
+          story: "桌上出现了一张没人手写的提醒。",
+          truth: "AI 桌面助手的定时任务自动打印了提醒。",
+          rules: "只能问 YES / NO 问题。",
+          provider: "deepseek",
+          model: "deepseek-v4-flash"
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (String(url).endsWith("/api/v1/games/turtle-soup/answer")) {
+        assert.match(body.question, /打印机/);
+        return new Response(JSON.stringify({
+          verdict: "YES",
+          answer: "是，和打印机自动打印有关。",
+          hint: "继续想是谁设置的。",
+          solved: false,
+          provider: "deepseek",
+          model: "deepseek-v4-flash"
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      results.push({ url, body });
+      return new Response(JSON.stringify({ status: "accepted" }), { status: 202, headers: { "Content-Type": "application/json" } });
+    },
+    WebSocketImpl: null
+  });
+  const speech = (id, transcript, sequence) => ({
+    event_id: id,
+    event_type: "speech.transcribed",
+    source: "audio",
+    session_id: "bot",
+    sequence,
+    schema_version: 1,
+    timestamp_ms: Date.now(),
+    payload: { transcript, matched_event: null }
+  });
+
+  await bridge.consume(speech("turtle-start", "我要玩海龟汤", 1));
+  await bridge.consume(speech("turtle-question", "是打印机自动打印的吗", 2));
+
+  assert.ok(results.some((entry) => entry.body?.event_type === "turtle.started"));
+  assert.ok(results.some((entry) => entry.body?.event_type === "turtle.answered"));
+  assert.equal(results.find((entry) => entry.body?.event_type === "turtle.answered").body.payload.verdict, "YES");
+});
+
 test("Letter printer feeds, sends bounded batches and replays idempotently", async () => {
   const imageCalls = [];
   const feedCalls = [];

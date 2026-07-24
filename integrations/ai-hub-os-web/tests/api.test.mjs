@@ -131,6 +131,25 @@ test("companion learning, play and life endpoints are interactive", async () => 
     }).then((response) => response.json());
     assert.equal(turtle.verdict, "YES");
 
+    const turtleGame = await fetch(`${baseUrl}/games/turtle-soup/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ theme: "AI 桌面打印机" })
+    }).then((response) => response.json());
+    assert.match(turtleGame.story, /。|纸|打印|AI/);
+    assert.ok(turtleGame.truth.length > 10);
+
+    const turtleRound = await fetch(`${baseUrl}/games/turtle-soup/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: "是定时任务自动打印的吗？",
+        story: turtleGame,
+        history: []
+      })
+    }).then((response) => response.json());
+    assert.ok(["YES", "CLOSE"].includes(turtleRound.verdict));
+
     const ocr = await fetch(`${baseUrl}/ai/ocr`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

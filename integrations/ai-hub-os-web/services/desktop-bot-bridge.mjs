@@ -8,6 +8,7 @@ import {
 const MAX_SEEN_EVENTS = 500;
 const MAX_LETTER_CHARS = 1_200;
 const LETTER_SESSION_TTL_MS = 30 * 60 * 1_000;
+const TURTLE_SESSION_TTL_MS = 45 * 60 * 1_000;
 
 function normalizeBaseUrl(value) {
   return String(value || "http://127.0.0.1:8090").replace(/\/+$/, "");
@@ -57,6 +58,7 @@ export class DesktopBotBridge {
     this.lastError = null;
     this.connectionState = "DISCONNECTED";
     this.letterSessions = new Map();
+    this.turtleSessions = new Map();
   }
 
   start() {
@@ -152,7 +154,9 @@ export class DesktopBotBridge {
 
     const parameters = commandParameters(event);
     if (event.event_type === "speech.transcribed") {
-      return this.handleLetterTranscript(event);
+      const letterResult = await this.handleLetterTranscript(event);
+      if (letterResult) return letterResult;
+      return this.handleTurtleTranscript(event);
     }
 
     if (event.event_type === "command.chat.ask") {
@@ -199,6 +203,79 @@ export class DesktopBotBridge {
       return decision;
     }
     return null;
+  }
+
+  purgeTurtleSessions() {
+    const cutoff = Date.now() - TURTLE_SESSION_TTL_MS;
+    for (const [sessionId, session] of this.turtleSessions) {
+      if (session.updatedAt < cutoff) this.turtleSessions.delete(sessionId);
+    }
+  }
+
+  isTurtleStart(text) {
+    return /海龟汤/u.test(text) && /(玩|开始|来一局|进入|开局)/u.test(text);
+  }
+
+  isTurtleStop(text) {
+    return /(?:退出|结束|停止|不玩了).{0,8}海龟汤|海龟汤.{0,8}(?:退出|结束|停止|不玩了)/u.test(text);
+  }
+
+  async handleTurtleTranscript(event) {
+    this.purgeTurtleSessions();
+    const transcript = String(event.payload?.transcript ?? "").trim();
+    if (!transcript) return null;
+    const sessionId = String(event.session_id ?? "bot");
+    let session = this.turtleSessions.get(sessionId);
+
+    if (this.isTurtleStop(transcript)) {
+      this.turtleSessions.delete(sessionId);
+      await this.postResult("turtle.stopped", event, { message: "海龟汤已结束。" });
+      return { intent: "STOP_TURTLE_SOUP" };
+    }
+
+    if (this.isTurtleStart(transcript)) {
+      const game = await this.startTurtleGame({
+        theme: transcript,
+        tone: "温暖轻悬疑，适合语音互动"
+      });
+      session = {
+        sessionId,
+        story: game,
+        history: [],
+        updatedAt: Date.now()
+      };
+      this.turtleSessions.set(sessionId, session);
+      await this.postResult("turtle.started", event, {
+        ...game,
+        message: "海龟汤已开始。请继续用语音提出 YES / NO 问题。"
+      });
+      return { intent: "START_TURTLE_SOUP", game };
+    }
+
+    if (!session) return null;
+    const result = await this.askTurtleGame({
+      question: transcript,
+      story: session.story,
+      history: session.history
+    });
+    const entry = {
+      question: transcript,
+      verdict: result.verdict,
+      answer: result.answer,
+      hint: result.hint,
+      provider: result.provider,
+      createdAt: new Date().toISOString()
+    };
+    session.history.push(entry);
+    session.updatedAt = Date.now();
+    await this.postResult("turtle.answered", event, {
+      ...result,
+      question: transcript,
+      story: session.story,
+      history: session.history,
+      message: `${result.verdict} · ${result.answer}`
+    });
+    return { intent: "TURTLE_QUESTION", ...result };
   }
 
   purgeLetterSessions() {
@@ -376,6 +453,34 @@ export class DesktopBotBridge {
       const error = new Error(result.detail ?? result.title ?? `VOICE_LETTER_${response.status}`);
       error.code = result.code ?? "VOICE_LETTER_SEND_FAILED";
       throw error;
+    }
+    return result;
+  }
+
+  async startTurtleGame(payload = {}) {
+    const response = await this.fetch(`${this.aiHubBaseUrl}/api/v1/games/turtle-soup/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30_000)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.detail ?? result.title ?? `TURTLE_START_${response.status}`);
+    }
+    return result;
+  }
+
+  async askTurtleGame(payload = {}) {
+    const response = await this.fetch(`${this.aiHubBaseUrl}/api/v1/games/turtle-soup/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30_000)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.detail ?? result.title ?? `TURTLE_ANSWER_${response.status}`);
     }
     return result;
   }

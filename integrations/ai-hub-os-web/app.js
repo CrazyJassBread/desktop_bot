@@ -9,6 +9,20 @@ const companionStore = createCompanionStore();
 let hardwarePollTimer = null;
 const seenHardwareEvents = new Set();
 
+const DEFAULT_TURTLE_GAME = {
+  id: "turtle-morning-printer",
+  title: "午夜的纸条",
+  story: "女孩每天睡前都会确认打印机里没有纸。第二天早上，桌上却总会出现一张写着“今天也要记得吃早餐”的纸条。她检查了门窗，家里没有别人。",
+  truth: "她曾经让 AI 桌面助手每天早晨自动打印一句照顾自己的提醒。后来她忘记关闭定时任务，而热敏打印机里其实还留着一小段纸卷。",
+  rules: "你只能提出能用 YES / NO / 无关 / 接近 回答的问题，直到猜出汤底。",
+  difficulty: "warm-mystery",
+  provider: "local-fallback",
+  model: null,
+  history: [],
+  revealed: false,
+  loading: false
+};
+
 const ui = {
   category: "全部",
   query: "",
@@ -21,6 +35,9 @@ const ui = {
   runnerLane: "down",
   runnerScore: 24,
   turtleVerdict: null,
+  turtleGame: structuredClone(DEFAULT_TURTLE_GAME),
+  turtleLastAnswer: "",
+  turtleQuestion: "",
   photoPreview: null,
   photoFileName: null,
   photoResult: null,
@@ -471,12 +488,28 @@ function turtleAnswerLabel(verdict) {
   return {
     YES: ["YES", "是的，这个方向很接近。"],
     NO: ["NO", "不是这样，换一个角度想想。"],
+    CLOSE: ["接近", "很接近了，把线索再连完整一点。"],
     IRRELEVANT: ["无关", "这个问题与真相没有直接关系。"]
   }[verdict] ?? ["ASK", "请提出一个只能用“是 / 否”回答的问题。"];
 }
 
+function turtleHistoryRows(history = []) {
+  return history.length
+    ? history.slice(-8).map((item, index) => `<div class="turtle-message">
+        <span><b>Q${Math.max(1, history.length - Math.min(history.length, 8) + index + 1)}</b>${escapeHtml(item.question)}</span>
+        <p><strong>${escapeHtml(item.verdict)}</strong>${escapeHtml(item.answer)}${item.hint ? `<small>${escapeHtml(item.hint)}</small>` : ""}</p>
+      </div>`).join("")
+    : `<div class="turtle-empty">对 MIMO 说“我要玩海龟汤”，或直接问第一个 YES / NO 问题。</div>`;
+}
+
+function turtlePrintable(game = ui.turtleGame) {
+  const history = (game.history ?? []).map((item, index) => `${index + 1}. Q: ${item.question}\n   A: ${item.verdict} · ${item.answer}`).join("\n\n");
+  return `海龟汤 · ${game.title}\n\n汤面\n${game.story}\n\n规则\n${game.rules}\n\n${history ? `已提问\n${history}\n\n` : ""}请用只能回答 YES / NO 的问题找出真相。`;
+}
+
 async function entertainmentView() {
   const state = companionStore.getState();
+  const game = ui.turtleGame ?? DEFAULT_TURTLE_GAME;
   const [verdict, verdictText] = turtleAnswerLabel(ui.turtleVerdict);
   const eggOpened = Boolean(state.eggOpenedAt);
   return `<section class="page companion-page entertainment-page" id="entertainment-view">
@@ -492,11 +525,20 @@ async function entertainmentView() {
         <div class="runner-controls"><button data-runner="up">↑ 跳起</button><button data-runner="down">↓ 蹲下</button><span>也可以在设备模拟器使用 Up / Down 手势</span></div>
       </article>
       <article class="turtle-card companion-card">
-        <header class="companion-card-head"><div><i>?</i><span><h2>海龟汤</h2><small>今天的谜题 · 轻悬疑</small></span></div><button class="round-button" data-print-story title="打印故事">${icon("printer", 16)}</button></header>
-        <div class="turtle-story"><p class="eyebrow">STORY</p><h3>午夜的纸条</h3><p>女孩每天睡前都会确认打印机里没有纸。第二天早上，桌上却总会出现一张写着“今天也要记得吃早餐”的纸条。她检查了门窗，家里没有别人。</p></div>
-        <div class="verdict-panel ${String(ui.turtleVerdict ?? "").toLowerCase()}"><strong id="turtle-verdict">${verdict}</strong><span>${verdictText}</span></div>
-        <form class="turtle-form" id="turtle-form"><input name="question" placeholder="例如：是设备自己打印的吗？" required><button>提问</button></form>
-        <button class="text-button" data-turtle-answer>揭晓汤底 ${icon("arrow", 14)}</button>
+        <header class="companion-card-head">
+          <div><i>?</i><span><h2>海龟汤</h2><small>${game.provider === "deepseek" ? "DeepSeek 主持中" : "本地主持 · 可离线"}</small></span></div>
+          <div class="turtle-tools"><button class="round-button" data-new-turtle title="AI 开新局">${icon("spark", 16)}</button><button class="round-button" data-print-story title="打印故事">${icon("printer", 16)}</button></div>
+        </header>
+        <div class="turtle-story"><p class="eyebrow">STORY</p><h3>${escapeHtml(game.title)}</h3><p>${escapeHtml(game.story)}</p><small>${escapeHtml(game.rules)}</small></div>
+        <div class="verdict-panel ${String(ui.turtleVerdict ?? "").toLowerCase()}"><strong id="turtle-verdict">${verdict}</strong><span>${escapeHtml(ui.turtleLastAnswer ?? verdictText)}</span></div>
+        <div class="turtle-dialogue">${turtleHistoryRows(game.history)}</div>
+        <form class="turtle-form" id="turtle-form">
+          <input name="question" value="${escapeHtml(ui.turtleQuestion ?? "")}" placeholder="例如：是设备自己打印的吗？" required>
+          <button ${game.loading ? "disabled" : ""}>${game.loading ? "思考中" : "提问"}</button>
+          <button class="outline-button" type="button" data-turtle-voice title="语音提问">${icon("mic", 14)}</button>
+        </form>
+        <div class="turtle-footer"><button class="text-button" data-turtle-answer>揭晓汤底 ${icon("arrow", 14)}</button><span>${game.model ? escapeHtml(game.model) : "fallback"}</span></div>
+        ${game.revealed ? `<div class="turtle-truth"><strong>汤底</strong><p>${escapeHtml(game.truth)}</p></div>` : ""}
       </article>
       <article class="photo-card companion-card">
         <header class="companion-card-head"><div><i>${icon("camera", 18)}</i><span><h2>Photo 2 Text</h2><small>照片 → OCR → AI 摘要</small></span></div></header>
@@ -683,6 +725,9 @@ function perceptionEventRow(event) {
     "letter.sending": "正在发送信件",
     "letter.sent": "信件发送成功",
     "letter.send_failed": "信件发送失败",
+    "turtle.started": "海龟汤开局",
+    "turtle.answered": "海龟汤回答",
+    "turtle.stopped": "海龟汤结束",
     "mode.toggle": "V 手势切换模式",
     "gesture.thumb_up": "点赞手势",
     "gesture.thumb_down": "向下手势",
@@ -1002,6 +1047,58 @@ function applyDesktopBotEvent(event) {
     };
     return true;
   }
+  if (event.eventType === "turtle.started") {
+    ui.voiceMode = "turtle";
+    ui.turtleVerdict = null;
+    ui.turtleLastAnswer = event.payload?.message ?? "海龟汤已开始。";
+    ui.turtleGame = {
+      id: event.payload?.id ?? `turtle-${event.eventId}`,
+      title: event.payload?.title ?? DEFAULT_TURTLE_GAME.title,
+      story: event.payload?.story ?? DEFAULT_TURTLE_GAME.story,
+      truth: event.payload?.truth ?? DEFAULT_TURTLE_GAME.truth,
+      rules: event.payload?.rules ?? DEFAULT_TURTLE_GAME.rules,
+      difficulty: event.payload?.difficulty ?? DEFAULT_TURTLE_GAME.difficulty,
+      provider: event.payload?.provider ?? "desktop_bot",
+      model: event.payload?.model ?? null,
+      history: [],
+      revealed: false,
+      loading: false
+    };
+    ui.voiceResult = { intent: "START_TURTLE_SOUP", reply: ui.turtleLastAnswer, provider: ui.turtleGame.provider, requiresConfirmation: false };
+    if (currentPath() !== "/entertainment") navigate("/entertainment");
+    return true;
+  }
+  if (event.eventType === "turtle.answered") {
+    ui.voiceMode = "turtle";
+    ui.turtleVerdict = event.payload?.verdict ?? "IRRELEVANT";
+    ui.turtleLastAnswer = event.payload?.message ?? event.payload?.answer ?? "已回答。";
+    const story = event.payload?.story ?? ui.turtleGame;
+    ui.turtleGame = {
+      ...ui.turtleGame,
+      ...story,
+      history: Array.isArray(event.payload?.history) ? event.payload.history : [
+        ...(ui.turtleGame.history ?? []),
+        {
+          question: event.payload?.question,
+          verdict: event.payload?.verdict,
+          answer: event.payload?.answer,
+          hint: event.payload?.hint,
+          provider: event.payload?.provider,
+          createdAt: new Date().toISOString()
+        }
+      ],
+      revealed: Boolean(ui.turtleGame.revealed || event.payload?.solved),
+      loading: false
+    };
+    ui.voiceResult = { intent: "START_TURTLE_SOUP", reply: ui.turtleLastAnswer, provider: event.payload?.provider ?? "desktop_bot", requiresConfirmation: false };
+    return currentPath() === "/entertainment";
+  }
+  if (event.eventType === "turtle.stopped") {
+    ui.voiceMode = "default";
+    ui.voiceResult = { intent: "CHAT", reply: event.payload?.message ?? "海龟汤已结束。", provider: "desktop_bot", requiresConfirmation: false };
+    toast(event.payload?.message ?? "海龟汤已结束");
+    return true;
+  }
   if (event.eventType === "language.changed") {
     toast(`设备语言已切换为 ${event.payload?.current === "en" ? "English" : "中文"}`, "success");
     return false;
@@ -1216,6 +1313,113 @@ function stagePrintable(kind, title, content, extra = {}, reply = "内容已经�
   render().then(() => document.querySelector(".voice-agent-card")?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
+async function startTurtleSoupGame(theme = "AI 桌面设备与热敏打印机") {
+  ui.turtleGame = { ...structuredClone(DEFAULT_TURTLE_GAME), loading: true };
+  ui.turtleVerdict = null;
+  ui.turtleLastAnswer = "AI 正在准备一个新的汤面。";
+  ui.voiceMode = "turtle";
+  await render();
+  try {
+    const game = await api.startTurtleSoup({ theme, tone: "温暖轻悬疑，适合语音互动" });
+    ui.turtleGame = { ...game, history: [], revealed: false, loading: false };
+    ui.turtleLastAnswer = "新汤面已准备好。你可以开始提问。";
+    ui.voiceResult = { intent: "START_TURTLE_SOUP", reply: "海龟汤已开始。你可以用语音提出 YES / NO 问题。", provider: game.provider ?? "deepseek", requiresConfirmation: false };
+    toast("海龟汤新局已开始", "success");
+  } catch (error) {
+    ui.turtleGame = { ...structuredClone(DEFAULT_TURTLE_GAME), loading: false };
+    ui.turtleLastAnswer = error.message;
+    toast(error.message, "error");
+  }
+  await render();
+}
+
+async function submitTurtleQuestion(question, source = "typed") {
+  const text = String(question ?? "").trim();
+  if (!text) return;
+  if (/^(汤底|答案|揭晓|真相)$/u.test(text)) {
+    ui.turtleGame.revealed = true;
+    ui.turtleVerdict = "YES";
+    ui.turtleLastAnswer = "汤底已揭晓。";
+    await render();
+    return;
+  }
+  ui.turtleQuestion = text;
+  ui.turtleGame = { ...(ui.turtleGame ?? DEFAULT_TURTLE_GAME), loading: true };
+  await render();
+  try {
+    const result = await api.turtleSoup(text, ui.turtleGame);
+    const entry = {
+      question: text,
+      verdict: result.verdict,
+      answer: result.answer,
+      hint: result.hint,
+      source,
+      provider: result.provider,
+      createdAt: new Date().toISOString()
+    };
+    ui.turtleGame = {
+      ...ui.turtleGame,
+      history: [...(ui.turtleGame.history ?? []), entry],
+      loading: false,
+      revealed: Boolean(ui.turtleGame.revealed || result.solved)
+    };
+    ui.turtleVerdict = result.verdict;
+    ui.turtleLastAnswer = result.solved ? `${result.answer} 汤底已经猜中。` : result.answer;
+    ui.turtleQuestion = "";
+    ui.voiceMode = "turtle";
+    ui.voiceResult = {
+      intent: "START_TURTLE_SOUP",
+      reply: `${result.verdict} · ${result.answer}`,
+      provider: result.provider ?? "deepseek",
+      requiresConfirmation: false
+    };
+  } catch (error) {
+    ui.turtleGame = { ...ui.turtleGame, loading: false };
+    toast(error.message, "error");
+  }
+  await render();
+}
+
+function startTurtleVoiceQuestion() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    toast("当前浏览器不支持语音识别，请先用输入框提问。", "error");
+    document.querySelector('#turtle-form input[name="question"]')?.focus();
+    return;
+  }
+  const recognition = new Recognition();
+  recognition.lang = "zh-CN";
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  let finalText = "";
+  ui.voiceListening = true;
+  ui.voiceMode = "turtle";
+  document.querySelector(".turtle-card")?.classList.add("listening");
+  toast("海龟汤正在听你的问题");
+  recognition.addEventListener("result", (event) => {
+    let interim = "";
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const part = event.results[index][0]?.transcript ?? "";
+      if (event.results[index].isFinal) finalText += part;
+      else interim += part;
+    }
+    const input = document.querySelector('#turtle-form input[name="question"]');
+    if (input) input.value = `${finalText}${interim}`.trim();
+  });
+  recognition.addEventListener("end", () => {
+    ui.voiceListening = false;
+    document.querySelector(".turtle-card")?.classList.remove("listening");
+    const transcript = finalText.trim();
+    if (transcript) submitTurtleQuestion(transcript, "web_microphone");
+  });
+  recognition.addEventListener("error", () => {
+    ui.voiceListening = false;
+    document.querySelector(".turtle-card")?.classList.remove("listening");
+    toast("没有听清，请再问一次", "error");
+  });
+  recognition.start();
+}
+
 function splitBrowserLetterFinish(value) {
   const text = String(value ?? "").trim();
   const match = text.match(/(?:\bover\b|确认发送信件|发送信件|寄出信件|结束写信|结束)[\s，,。.!！?？;；]*$/iu);
@@ -1332,6 +1536,7 @@ async function processVoiceCommand(transcript) {
   const clipped = raw.length > 1_200;
   const text = clipped ? raw.slice(0, 1_200) : raw;
   const letterMode = String(ui.voiceMode).startsWith("letter");
+  const turtleMode = ui.voiceMode === "turtle" || currentPath() === "/entertainment";
   const letterFinish = letterMode ? splitBrowserLetterFinish(text) : { finished: false, content: text, keyword: null };
   const pendingPrintable = ui.voiceResult?.requiresConfirmation ? ui.voiceResult.printable : null;
   ui.voiceTranscript = text;
@@ -1339,6 +1544,10 @@ async function processVoiceCommand(transcript) {
   ui.voiceListening = false;
   document.querySelector(".voice-agent-status h2")?.replaceChildren("AI 正在理解");
   try {
+    if (turtleMode && !/我要玩海龟汤|开始海龟汤|来一局海龟汤/u.test(text)) {
+      await submitTurtleQuestion(text, "web_voice_agent");
+      return;
+    }
     if (letterMode) {
       const complete = appendBrowserLetterContent(letterFinish.content);
       if (!complete && letterFinish.content) {
@@ -1384,15 +1593,17 @@ async function processVoiceCommand(transcript) {
       companionStore.dispatch({ type: "tasks.replace", tasks: result.todos });
     }
     if (result.intent === "START_TURTLE_SOUP") {
+      ui.voiceMode = "turtle";
       toast(result.reply, "success");
       navigate("/entertainment");
+      await startTurtleSoupGame();
       return;
     }
   } catch (error) {
     toast(`AI 暂时无法理解：${error.message}`, "error");
   } finally {
     ui.voiceProcessing = false;
-    if (currentPath() === "/education") render();
+    if (["/education", "/entertainment"].includes(currentPath())) render();
   }
 }
 
@@ -1598,21 +1809,26 @@ function wire() {
   }));
   document.querySelector("#turtle-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    try {
-      const question = new FormData(event.currentTarget).get("question");
-      const result = await api.turtleSoup(question);
-      ui.turtleVerdict = result.verdict;
-      render();
-    } catch (error) { toast(error.message, "error"); }
+    const question = new FormData(event.currentTarget).get("question");
+    await submitTurtleQuestion(question, "typed");
+  });
+  document.querySelector("[data-new-turtle]")?.addEventListener("click", () => {
+    startTurtleSoupGame();
+  });
+  document.querySelector("[data-turtle-voice]")?.addEventListener("click", startTurtleVoiceQuestion);
+  document.querySelector("#turtle-form input[name='question']")?.addEventListener("input", (event) => {
+    ui.turtleQuestion = event.currentTarget.value;
   });
   document.querySelector("[data-turtle-answer]")?.addEventListener("click", () => {
     ui.turtleVerdict = "YES";
-    toast("汤底：她曾让 AI 助手每天早晨打印一句照顾自己的提醒，后来忘记关闭任务。");
+    ui.turtleGame.revealed = true;
+    ui.turtleLastAnswer = "汤底已揭晓。";
+    toast(`汤底：${ui.turtleGame.truth}`);
     render();
   });
   document.querySelector("[data-print-story]")?.addEventListener("click", async () => {
     try {
-      await printCompanionContent("海龟汤 · 午夜的纸条", "海龟汤 · 午夜的纸条\n\n女孩每天睡前都会确认打印机里没有纸。第二天早上，桌上却总会出现一张提醒她吃早餐的纸条。\n\n请用只能回答 YES / NO 的问题找出真相。", "story");
+      await printCompanionContent(`海龟汤 · ${ui.turtleGame.title}`, turtlePrintable(ui.turtleGame), "story");
     } catch (error) { toast(error.message, "error"); }
   });
   document.querySelector("#photo-input")?.addEventListener("change", (event) => {
