@@ -199,11 +199,15 @@ class LLMModesConfig:
 
 
 @dataclass
+class LLMProviderConfig:
+    base_url: str = ""
+    model: str = ""
+    api_key: str = field(default="", repr=False)
+
+
+@dataclass
 class LLMConfig:
     enabled: bool = False
-    base_url: str = ""
-    api_key_env: str = "LLM_API_KEY"
-    model: str = ""
     timeout_seconds: float = 60.0
     temperature: float = 0.4
     max_output_tokens: int = 2_000
@@ -211,6 +215,22 @@ class LLMConfig:
     user_nickname: str = "用户"
     session: LLMSessionConfig = field(default_factory=LLMSessionConfig)
     modes: LLMModesConfig = field(default_factory=LLMModesConfig)
+    provider: LLMProviderConfig | None = field(
+        default=None,
+        repr=False,
+    )
+
+    @property
+    def available(self) -> bool:
+        return self.enabled and self.provider is not None
+
+    @property
+    def unavailable_reason(self) -> str | None:
+        if not self.enabled:
+            return "disabled"
+        if self.provider is None:
+            return "not_configured"
+        return None
 
 
 @dataclass
@@ -282,7 +302,8 @@ def _build_llm(values: object) -> LLMConfig:
         for key, value in values.items()
         if key not in {"session", "modes"}
     }
-    unknown = set(values) - set(LLMConfig.__dataclass_fields__)
+    public_fields = set(LLMConfig.__dataclass_fields__) - {"provider"}
+    unknown = set(values) - public_fields
     if unknown:
         raise ConfigurationError(
             f"unknown llm options: {', '.join(sorted(unknown))}"
@@ -354,9 +375,6 @@ def _validate_llm(config: LLMConfig) -> None:
         raise ConfigurationError("llm.enabled must be a boolean")
     if config.enabled:
         for name, value in (
-            ("llm.base_url", config.base_url),
-            ("llm.api_key_env", config.api_key_env),
-            ("llm.model", config.model),
             ("llm.log_path", config.log_path),
             ("llm.user_nickname", config.user_nickname),
         ):
@@ -612,8 +630,37 @@ def _validate(config: AppConfig) -> None:
         raise ConfigurationError("asr.mock_transcripts must map strings to strings")
 
 
-def load_config(path: Path | str | None = None) -> AppConfig:
+_LLM_PROVIDER_FIELDS = {"base_url", "model", "api_key"}
+
+
+def _load_llm_provider(path: Path) -> LLMProviderConfig | None:
+    if not path.is_file():
+        return None
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        raise ConfigurationError("llm provider config must be a mapping")
+    unknown = set(loaded) - _LLM_PROVIDER_FIELDS
+    if unknown:
+        raise ConfigurationError(
+            "unknown llm provider options: "
+            f"{', '.join(sorted(unknown))}"
+        )
+    provider = _build(LLMProviderConfig, loaded, "llm provider")
+    for name in ("base_url", "model", "api_key"):
+        value = getattr(provider, name)
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigurationError(
+                f"llm provider {name} cannot be empty"
+            )
+    return provider
+
+
+def load_config(
+    path: Path | str | None = None,
+    llm_path: Path | str | None = None,
+) -> AppConfig:
     data: dict[str, Any] = {}
+    config_path: Path | None = None
     if path is not None:
         config_path = Path(path)
         if not config_path.is_file():
@@ -634,5 +681,17 @@ def load_config(path: Path | str | None = None) -> AppConfig:
         },
         llm=_build_llm(data.get("llm")),
     )
+    if config.llm.enabled:
+        provider_path = (
+            Path(llm_path)
+            if llm_path is not None
+            else (
+                config_path.with_name("llm.yaml")
+                if config_path is not None
+                else None
+            )
+        )
+        if provider_path is not None:
+            config.llm.provider = _load_llm_provider(provider_path)
     _validate(config)
     return config

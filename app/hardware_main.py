@@ -49,7 +49,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="run",
         help="run the service, or open the live Vision test window",
     )
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config/app.yaml"),
+    )
+    parser.add_argument(
+        "--llm-config",
+        type=Path,
+        default=Path("config/llm.yaml"),
+    )
     parser.add_argument("--session", default=None)
     channel = parser.add_mutually_exclusive_group()
     channel.add_argument("--audio-only", action="store_true")
@@ -201,8 +210,12 @@ def build_daemon(
 
 
 async def run(args: argparse.Namespace) -> None:
-    config = load_config(args.config)
     setup_logging()
+    config = load_config(args.config, args.llm_config)
+    if config.llm.unavailable_reason == "not_configured":
+        LOGGER.warning(
+            "LLM provider is not configured; LLM modes will be rejected"
+        )
     daemon, gesture_backend = build_daemon(config, args)
     api_server = None
     try:

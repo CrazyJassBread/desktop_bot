@@ -77,8 +77,8 @@ vision:
   max_image_bytes: 2097152
   max_hands: 2
   score_threshold: 0.70
-  mode_window_size: 5
-  mode_required_hits: 3
+  mode_window_size: 3
+  mode_required_hits: 2
   release_frames: 2
   gesture_window_size: 3
   gesture_required_hits: 2
@@ -109,9 +109,6 @@ printer:
 
 llm:
   enabled: false
-  base_url: ""
-  api_key_env: LLM_API_KEY
-  model: ""
   timeout_seconds: 60
   temperature: 0.4
   max_output_tokens: 2000

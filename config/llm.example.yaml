@@ -1,0 +1,4 @@
+# Copy this file to config/llm.yaml and enter newly issued credentials.
+base_url: https://provider.example/v1
+model: provider-model-name
+api_key: ""

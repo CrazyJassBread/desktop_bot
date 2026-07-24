@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app.config import ConfigurationError, load_config
@@ -31,7 +33,7 @@ def test_config_defaults():
 
 
 def test_repository_config_loads():
-    config = load_config("config.yaml")
+    config = load_config("config/app.yaml", "config/llm.yaml")
     assert config.asr.backend == "faster_whisper"
     assert config.vision.enabled is True
 
@@ -91,14 +93,12 @@ def test_config_rejects_invalid_printer_settings(tmp_path, body):
 
 
 def test_config_loads_nested_llm_overrides(tmp_path):
-    path = tmp_path / "config.yaml"
-    path.write_text(
+    app_path = tmp_path / "app.yaml"
+    llm_path = tmp_path / "llm.yaml"
+    app_path.write_text(
         """
 llm:
   enabled: true
-  base_url: https://example.test/v1
-  api_key_env: TEST_LLM_KEY
-  model: test-model
   user_nickname: 小面包
   session:
     idle_timeout_seconds: 30
@@ -119,11 +119,20 @@ llm:
 """,
         encoding="utf-8",
     )
+    llm_path.write_text(
+        """
+base_url: https://example.test/v1
+model: test-model
+api_key: sentinel-secret
+""",
+        encoding="utf-8",
+    )
 
-    config = load_config(path)
+    config = load_config(app_path, llm_path)
 
     assert config.llm.enabled is True
-    assert config.llm.model == "test-model"
+    assert config.llm.provider is not None
+    assert config.llm.provider.model == "test-model"
     assert config.llm.user_nickname == "小面包"
     assert config.llm.session.max_characters == 4000
     assert config.llm.modes.letter.recipient_templates == [
@@ -135,7 +144,6 @@ llm:
 @pytest.mark.parametrize(
     "llm_body",
     [
-        "enabled: true\n",
         "session:\n    idle_timeout_seconds: 0\n",
         "session:\n    max_duration_seconds: -1\n",
         "session:\n    max_characters: 0\n",
@@ -176,3 +184,94 @@ def test_app_cli_supports_vision_test_mode():
     assert args.mode == "test"
     assert args.vision_port == 9000
     assert args.scale == 1.5
+
+
+def test_app_cli_uses_config_directory_defaults():
+    args = build_parser().parse_args([])
+
+    assert args.config == Path("config/app.yaml")
+    assert args.llm_config == Path("config/llm.yaml")
+
+
+def test_private_llm_file_is_gitignored():
+    ignored = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert "/config/llm.yaml" in ignored
+    assert Path("config/llm.example.yaml").is_file()
+
+
+def test_load_config_merges_private_llm_provider(tmp_path):
+    app_path = tmp_path / "app.yaml"
+    llm_path = tmp_path / "llm.yaml"
+    app_path.write_text(
+        """
+llm:
+  enabled: true
+  user_nickname: 小面包
+""",
+        encoding="utf-8",
+    )
+    llm_path.write_text(
+        """
+base_url: https://example.test/v1
+model: test-model
+api_key: sentinel-secret
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(app_path, llm_path)
+
+    assert config.llm.available is True
+    assert config.llm.unavailable_reason is None
+    assert config.llm.provider is not None
+    assert config.llm.provider.base_url == "https://example.test/v1"
+    assert config.llm.provider.model == "test-model"
+    assert config.llm.provider.api_key == "sentinel-secret"
+    assert config.llm.user_nickname == "小面包"
+    assert "sentinel-secret" not in repr(config)
+
+
+def test_enabled_llm_without_private_file_is_unavailable(tmp_path):
+    app_path = tmp_path / "app.yaml"
+    app_path.write_text("llm:\n  enabled: true\n", encoding="utf-8")
+
+    config = load_config(app_path, tmp_path / "missing.yaml")
+
+    assert config.llm.available is False
+    assert config.llm.unavailable_reason == "not_configured"
+    assert config.llm.provider is None
+
+
+def test_disabled_llm_reports_disabled_without_private_file(tmp_path):
+    app_path = tmp_path / "app.yaml"
+    app_path.write_text("llm:\n  enabled: false\n", encoding="utf-8")
+
+    config = load_config(app_path, tmp_path / "missing.yaml")
+
+    assert config.llm.available is False
+    assert config.llm.unavailable_reason == "disabled"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "base_url: https://example.test/v1\nmodel: test\n",
+        "base_url: ''\nmodel: test\napi_key: secret\n",
+        "base_url: https://example.test/v1\nmodel: ''\napi_key: secret\n",
+        "base_url: https://example.test/v1\nmodel: test\napi_key: ''\n",
+        (
+            "base_url: https://example.test/v1\n"
+            "model: test\napi_key: secret\nextra: true\n"
+        ),
+        "- not\n- a\n- mapping\n",
+    ],
+)
+def test_private_llm_config_rejects_invalid_content(tmp_path, body):
+    app_path = tmp_path / "app.yaml"
+    llm_path = tmp_path / "llm.yaml"
+    app_path.write_text("llm:\n  enabled: true\n", encoding="utf-8")
+    llm_path.write_text(body, encoding="utf-8")
+
+    with pytest.raises(ConfigurationError):
+        load_config(app_path, llm_path)

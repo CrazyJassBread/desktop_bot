@@ -9,6 +9,7 @@ output/*.json
 models/*
 !models/.gitkeep
 .env
+/config/llm.yaml
 
 api.txt
 
