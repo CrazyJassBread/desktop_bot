@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
@@ -147,6 +148,72 @@ class PrinterConfig:
 
 
 @dataclass
+class LLMSessionConfig:
+    idle_timeout_seconds: float = 120.0
+    max_duration_seconds: float = 900.0
+    max_characters: int = 12_000
+    body_prefixes: list[str] = field(
+        default_factory=lambda: ["正文：", "正文:"]
+    )
+
+
+def _letter_mode_defaults() -> "LLMModeConfig":
+    return LLMModeConfig(
+        start_phrases=[
+            "开始写信",
+            "我要写信",
+            "帮我写信",
+            "我要写一封信",
+        ],
+        recipient_templates=[
+            "我要给{recipient}写信",
+            "帮我给{recipient}写封信",
+        ],
+        recipient_prefixes=["收件人是", "写给"],
+        finish_phrases=["小A，完成写信", "小A，信写完了"],
+        cancel_phrases=["小A，取消写信", "小A，放弃这封信"],
+    )
+
+
+def _qa_mode_defaults() -> "LLMModeConfig":
+    return LLMModeConfig(
+        start_phrases=["进入问答模式", "我有一个问题", "帮我回答"],
+        finish_phrases=["小A，请回答", "小A，问题说完了"],
+        cancel_phrases=["小A，取消问答", "小A，不要回答了"],
+    )
+
+
+@dataclass
+class LLMModeConfig:
+    start_phrases: list[str] = field(default_factory=list)
+    recipient_templates: list[str] = field(default_factory=list)
+    recipient_prefixes: list[str] = field(default_factory=list)
+    finish_phrases: list[str] = field(default_factory=list)
+    cancel_phrases: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LLMModesConfig:
+    letter: LLMModeConfig = field(default_factory=_letter_mode_defaults)
+    qa: LLMModeConfig = field(default_factory=_qa_mode_defaults)
+
+
+@dataclass
+class LLMConfig:
+    enabled: bool = False
+    base_url: str = ""
+    api_key_env: str = "LLM_API_KEY"
+    model: str = ""
+    timeout_seconds: float = 60.0
+    temperature: float = 0.4
+    max_output_tokens: int = 2_000
+    log_path: str = "logs/llm.log"
+    user_nickname: str = "用户"
+    session: LLMSessionConfig = field(default_factory=LLMSessionConfig)
+    modes: LLMModesConfig = field(default_factory=LLMModesConfig)
+
+
+@dataclass
 class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     asr: ASRConfig = field(default_factory=ASRConfig)
@@ -157,6 +224,7 @@ class AppConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     application: ApplicationConfig = field(default_factory=ApplicationConfig)
     printer: PrinterConfig = field(default_factory=PrinterConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
     api: APIConfig = field(default_factory=APIConfig)
 
 
@@ -202,6 +270,178 @@ def _positive_int(value: object, name: str) -> None:
         raise ConfigurationError(f"{name} must be an integer")
     if value <= 0:
         raise ConfigurationError(f"{name} must be positive")
+
+
+def _build_llm(values: object) -> LLMConfig:
+    if values is None:
+        return LLMConfig()
+    if not isinstance(values, dict):
+        raise ConfigurationError("llm must be a mapping")
+    root_values = {
+        key: value
+        for key, value in values.items()
+        if key not in {"session", "modes"}
+    }
+    unknown = set(values) - set(LLMConfig.__dataclass_fields__)
+    if unknown:
+        raise ConfigurationError(
+            f"unknown llm options: {', '.join(sorted(unknown))}"
+        )
+    config = _build(LLMConfig, root_values, "llm")
+    config.session = _build(
+        LLMSessionConfig,
+        values.get("session"),
+        "llm.session",
+    )
+    modes_values = values.get("modes")
+    if modes_values is None:
+        modes_values = {}
+    if not isinstance(modes_values, dict):
+        raise ConfigurationError("llm.modes must be a mapping")
+    unknown_modes = set(modes_values) - {"letter", "qa"}
+    if unknown_modes:
+        raise ConfigurationError(
+            "unknown llm.modes options: "
+            f"{', '.join(sorted(unknown_modes))}"
+        )
+    config.modes = LLMModesConfig(
+        letter=_build(
+            LLMModeConfig,
+            modes_values.get("letter"),
+            "llm.modes.letter",
+        )
+        if "letter" in modes_values
+        else _letter_mode_defaults(),
+        qa=_build(
+            LLMModeConfig,
+            modes_values.get("qa"),
+            "llm.modes.qa",
+        )
+        if "qa" in modes_values
+        else _qa_mode_defaults(),
+    )
+    return config
+
+
+_LLM_SEPARATORS = re.compile(
+    r"[\s，。！？、,.!?;；:：\"'“”‘’（）()\[\]【】]+"
+)
+
+
+def _normalize_llm_phrase(value: str) -> str:
+    return _LLM_SEPARATORS.sub("", value).casefold()
+
+
+def _validate_phrase_list(
+    value: object,
+    name: str,
+    *,
+    allow_empty: bool = False,
+) -> None:
+    if (
+        not isinstance(value, list)
+        or (not allow_empty and not value)
+        or not all(
+        isinstance(item, str) and item.strip()
+        for item in value
+        )
+    ):
+        raise ConfigurationError(f"{name} must contain non-empty strings")
+
+
+def _validate_llm(config: LLMConfig) -> None:
+    if not isinstance(config.enabled, bool):
+        raise ConfigurationError("llm.enabled must be a boolean")
+    if config.enabled:
+        for name, value in (
+            ("llm.base_url", config.base_url),
+            ("llm.api_key_env", config.api_key_env),
+            ("llm.model", config.model),
+            ("llm.log_path", config.log_path),
+            ("llm.user_nickname", config.user_nickname),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError(f"{name} cannot be empty")
+    for name, value in (
+        ("llm.timeout_seconds", config.timeout_seconds),
+        (
+            "llm.session.idle_timeout_seconds",
+            config.session.idle_timeout_seconds,
+        ),
+        (
+            "llm.session.max_duration_seconds",
+            config.session.max_duration_seconds,
+        ),
+    ):
+        _positive(value, name)
+    _positive_int(config.max_output_tokens, "llm.max_output_tokens")
+    _positive_int(
+        config.session.max_characters,
+        "llm.session.max_characters",
+    )
+    if (
+        isinstance(config.temperature, bool)
+        or not isinstance(config.temperature, (int, float))
+        or config.temperature < 0
+    ):
+        raise ConfigurationError(
+            "llm.temperature must be a non-negative number"
+        )
+    _validate_phrase_list(
+        config.session.body_prefixes,
+        "llm.session.body_prefixes",
+    )
+
+    starts_by_mode: dict[str, set[str]] = {}
+    for mode_name, mode in (
+        ("letter", config.modes.letter),
+        ("qa", config.modes.qa),
+    ):
+        for field_name in (
+            "start_phrases",
+            "finish_phrases",
+            "cancel_phrases",
+        ):
+            _validate_phrase_list(
+                getattr(mode, field_name),
+                f"llm.modes.{mode_name}.{field_name}",
+            )
+        for field_name in ("recipient_templates", "recipient_prefixes"):
+            _validate_phrase_list(
+                getattr(mode, field_name),
+                f"llm.modes.{mode_name}.{field_name}",
+                allow_empty=True,
+            )
+        if mode_name == "letter" and not (
+            mode.start_phrases or mode.recipient_templates
+        ):
+            raise ConfigurationError(
+                "letter mode requires a start phrase or recipient template"
+            )
+        for template in mode.recipient_templates:
+            if template.count("{recipient}") != 1:
+                raise ConfigurationError(
+                    "each recipient template must contain exactly one "
+                    "{recipient}"
+                )
+        finish = {
+            _normalize_llm_phrase(item)
+            for item in mode.finish_phrases
+        }
+        cancel = {
+            _normalize_llm_phrase(item)
+            for item in mode.cancel_phrases
+        }
+        if finish & cancel:
+            raise ConfigurationError(
+                f"llm.modes.{mode_name} finish and cancel phrases overlap"
+            )
+        starts_by_mode[mode_name] = {
+            _normalize_llm_phrase(item)
+            for item in (*mode.start_phrases, *mode.recipient_templates)
+        }
+    if starts_by_mode["letter"] & starts_by_mode["qa"]:
+        raise ConfigurationError("letter and qa start rules overlap")
 
 
 def _validate(config: AppConfig) -> None:
@@ -353,6 +593,7 @@ def _validate(config: AppConfig) -> None:
     ):
         if not isinstance(value, bool):
             raise ConfigurationError(f"{name} must be a boolean")
+    _validate_llm(config.llm)
     if isinstance(config.api.port, bool) or not isinstance(config.api.port, int):
         raise ConfigurationError("api.port must be an integer")
     if not 1 <= config.api.port <= 65_535:
@@ -381,7 +622,7 @@ def load_config(path: Path | str | None = None) -> AppConfig:
         if not isinstance(loaded, dict):
             raise ConfigurationError("config root must be a mapping")
         data = loaded
-    unknown = set(data) - set(_SECTIONS)
+    unknown = set(data) - (set(_SECTIONS) | {"llm"})
     if unknown:
         raise ConfigurationError(
             f"unknown config sections: {', '.join(sorted(unknown))}"
@@ -390,7 +631,8 @@ def load_config(path: Path | str | None = None) -> AppConfig:
         **{
             name: _build(cls, data.get(name), name)
             for name, cls in _SECTIONS.items()
-        }
+        },
+        llm=_build_llm(data.get("llm")),
     )
     _validate(config)
     return config
