@@ -41,10 +41,9 @@ npm run dev
 - `POST /api/v1/ai/letter/{generate|polish}`
 - `POST /api/v1/printer/content`
 - `POST /api/v1/printer/content/preview`
-- `GET /api/v1/hardware/bridge/status`
-- `GET /api/v1/hardware/bridge/state`
-- `POST /api/v1/hardware/photo/process`
-- `GET /api/v1/hardware/photos/:captureId.jpg`
+- `POST /api/v1/printer/text`
+- `POST /api/v1/printer/letter`
+- `POST /api/v1/printer/letter/preview`
 - `GET /api/v1/devices`
 - `GET /api/v1/devices/:id/status`
 - `PUT /api/v1/devices/:id/print-policy`
@@ -52,3 +51,4 @@ npm run dev
 - `POST /api/v1/print-jobs/:id/device-status`
 
 当前 Repository 为进程内存实现，API Client、状态和错误契约可在接 PostgreSQL 后保持不变。
+网页端语音只使用浏览器内置 Web Speech API；硬件侧只接收后端转发的打印任务。

@@ -1,4 +1,4 @@
-import { api, ApiProblem } from "./services/api-client.js";
+﻿import { api, ApiProblem } from "./services/api-client.js";
 import { DeviceBus } from "./services/device-bus.js";
 import { createCompanionStore, createPrintJob } from "./services/companion-store.js";
 
@@ -6,8 +6,6 @@ const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 const bus = new DeviceBus("ai-hub-web");
 const companionStore = createCompanionStore();
-let hardwarePollTimer = null;
-const seenHardwareEvents = new Set();
 
 const DEFAULT_TURTLE_GAME = {
   id: "turtle-morning-printer",
@@ -553,7 +551,7 @@ async function entertainmentView() {
               : `<p class="eyebrow">WAITING</p><strong>文字会显示在这里</strong><span>上传后可复制、总结或打印。</span>`}
           </div>
         </div>
-        <div class="photo-actions"><button class="outline-button" data-device-photo>${icon("device", 15)}设备拍照</button><button class="primary-button" data-run-ocr ${ui.photoPreview ? "" : "disabled"}>${icon("spark", 15)}识别文字</button></div>
+        <div class="photo-actions"><button class="primary-button" data-run-ocr ${ui.photoPreview ? "" : "disabled"}>${icon("spark", 15)}识别文字</button>${ui.photoResult ? `<button class="outline-button" data-print-ocr>${icon("printer", 15)}打印结果</button>` : ""}</div>
       </article>
       <article class="egg-card companion-card ${eggOpened ? "opened" : ""}">
         <div class="egg-sparkles">✦　·　✧　·　✦</div>
@@ -577,7 +575,7 @@ async function lifeView() {
           <label>今天的心情<div class="mood-picker">${[["calm", "☁", "平静"], ["happy", "☀", "开心"], ["tired", "☾", "有点累"], ["excited", "✦", "期待"]].map(([value, face, label], index) => `<span><input type="radio" name="mood" value="${value}" ${index === 0 ? "checked" : ""}><i>${face}</i><b>${label}</b></span>`).join("")}</div></label>
           <label>标题<input name="title" placeholder="给今天一个小标题" required></label>
           <label>写下今天<textarea name="body" rows="8" placeholder="发生了什么？哪一个瞬间想被记住？" required></textarea></label>
-          <div class="journal-actions"><button type="button" class="outline-button" data-journal-summary>${icon("spark", 15)}AI 帮我总结</button><button class="primary-button" type="submit">保存手帐</button></div>
+          <div class="journal-actions"><button type="button" class="outline-button" data-journal-summary>${icon("spark", 15)}AI 帮我总结</button>${ui.journalSummary ? `<button type="button" class="outline-button" data-print-journal>${icon("printer", 15)}打印总结</button>` : ""}<button class="primary-button" type="submit">保存手帐</button></div>
           <div class="journal-summary ${ui.journalSummary ? "ready" : ""}" id="journal-summary">${escapeHtml(ui.journalSummary || "AI 总结会显示在这里，你可以确认后再保存。")}</div>
         </form>
       </article>
@@ -588,7 +586,7 @@ async function lifeView() {
       <article class="fortune-card companion-card">
         <div class="fortune-orbit"><i></i><i></i><span>✦</span></div>
         <div class="fortune-copy"><p class="eyebrow">JUST FOR FUN</p><h2>今日趣味预测</h2><p>它不是占卜建议，只是一张根据你的问题生成的轻松小卡片。</p>
-          <form id="fortune-form"><input name="birthday" type="date" aria-label="生日" required><input name="question" placeholder="最近在意什么？" required><button class="primary-button">抽一张小卡</button></form>
+          <form id="fortune-form"><input name="birthday" type="date" aria-label="生日" required><input name="question" placeholder="最近在意什么？" required><button class="primary-button">抽一张小卡</button>${ui.fortuneResult ? `<button type="button" class="outline-button" data-print-fortune>${icon("printer", 15)}打印小卡</button>` : ""}</form>
         </div>
         <div class="fortune-result" id="fortune-result">${ui.fortuneResult ? `<small>YOUR CARD</small><h3>${escapeHtml(ui.fortuneResult.title)}</h3><p>${escapeHtml(ui.fortuneResult.reading)}</p><b>${escapeHtml(ui.fortuneResult.disclaimer)}</b>` : `<span>?</span><p>答案不会替你做决定，<br>但也许会给今天一个新角度。</p>`}</div>
       </article>
@@ -713,72 +711,8 @@ function printJobRow(job) {
   return `<div class="print-job-row"><i class="${job.status.toLowerCase()}">${icon("printer", 16)}</i><span><strong>${escapeHtml(job.title)}</strong><small>${formatTime(job.createdAt)} · ${job.format}</small></span><b>${label}</b><button class="round-button">${icon("more", 15)}</button></div>`;
 }
 
-function perceptionEventRow(event) {
-  const labels = {
-    wake: "语音唤醒",
-    "mode.enter_chat": "进入聊天",
-    "mode.exit_chat": "退出聊天",
-    "feature.write_letter": "语音写信",
-    "command.letter.send": "语音确认发送",
-    "letter.listening": "正在聆听信件",
-    "letter.content_buffered": "已记录信件正文",
-    "letter.sending": "正在发送信件",
-    "letter.sent": "信件发送成功",
-    "letter.send_failed": "信件发送失败",
-    "turtle.started": "海龟汤开局",
-    "turtle.answered": "海龟汤回答",
-    "turtle.stopped": "海龟汤结束",
-    "mode.toggle": "V 手势切换模式",
-    "gesture.thumb_up": "点赞手势",
-    "gesture.thumb_down": "向下手势",
-    "gesture.open_palm": "张开手掌"
-  };
-  const detail = event.payload?.transcript ?? event.payload?.label ?? event.payload?.payload_text ?? "结构化事件";
-  return `<div class="perception-event"><i class="${event.source}">${icon(event.source === "audio" ? "mic" : "spark", 15)}</i><span><strong>${escapeHtml(labels[event.eventType] ?? event.eventType)}</strong><small>${escapeHtml(String(detail))}</small></span><time>${formatTime(new Date(event.timestampMs).toISOString())}</time></div>`;
-}
-
-function formatMetricNumber(value, digits = 0) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "0";
-  return digits ? number.toFixed(digits) : String(Math.round(number));
-}
-
-function latestTranscript(events = []) {
-  return events.slice().reverse().find((event) => {
-    const text = event.payload?.transcript ?? event.payload?.payload_text;
-    return event.source === "audio" && String(text ?? "").trim();
-  })?.payload?.transcript ?? "";
-}
-
-function audioDiagnosticsPanel(perception, perceptionEvents) {
-  const bot = perception.desktopBot ?? {};
-  const audio = bot.audio ?? {};
-  const metrics = bot.metrics ?? {};
-  const connected = Boolean(audio.connected);
-  const transcript = latestTranscript(perceptionEvents.items ?? []);
-  const eventLabel = transcript ? transcript : "还没有 ASR 转写文本。先观察 frames/rms 是否增长。";
-  const peer = audio.peer_host ? `${audio.peer_host}:${audio.peer_port ?? ""}` : "等待硬件连接";
-  return `<div class="audio-diagnostics ${connected ? "connected" : ""}">
-    <div class="audio-diagnostics-head">
-      <span>${icon("mic", 16)}<b>${connected ? "麦克风已接入" : "等待麦克风"}</b></span>
-      <small>${escapeHtml(peer)}</small>
-    </div>
-    <div class="audio-meter"><i style="width:${Math.min(100, Math.round(Number(audio.peak ?? 0) * 100))}%"></i></div>
-    <div class="audio-diagnostic-grid">
-      <span><b>${formatMetricNumber(audio.frames_received ?? metrics.audio_frames_received)}</b><small>frames</small></span>
-      <span><b>${formatMetricNumber(audio.rms, 3)}</b><small>rms</small></span>
-      <span><b>${formatMetricNumber(audio.peak, 3)}</b><small>peak</small></span>
-      <span><b>${formatMetricNumber(metrics.speech_transcripts)}</b><small>texts</small></span>
-    </div>
-    <div class="audio-transcript-preview"><strong>最近识别</strong><p>${escapeHtml(eventLabel)}</p></div>
-  </div>`;
-}
-
 async function deviceView() {
-  const [devices, jobs, perception, perceptionEvents, bridge] = await Promise.all([
-    api.devices(), api.printJobs(), api.perceptionStatus(), api.perceptionEvents(),
-    api.desktopBotBridgeStatus().catch(() => ({ state: "DISCONNECTED", baseUrl: "http://127.0.0.1:8090", lastSequence: 0 }))
-  ]);
+  const [devices, jobs] = await Promise.all([api.devices(), api.printJobs()]);
   const current = devices.items[0];
   return `<section class="page device-page" id="device-view">
     ${pageHead("HARDWARE", "设备中心", "管理 Letter 自动打印、设备状态和耗材安全。", `<button class="outline-button" data-open-simulator>${icon("device", 16)}打开模拟器</button>`)}
@@ -824,21 +758,21 @@ async function deviceView() {
       </form>
       <p class="policy-note">${icon("shield", 16)}中文会由本地服务转换为 GB2312 二进制；英文使用 JSON。请求只从本机后端发送到局域网设备，不暴露设备 IP 给公网浏览器。</p>
     </article>
-    <article class="perception-console">
+    <article class="printer-link-console">
       <div class="card-head">
-        <div><p class="eyebrow">DESKTOP_BOT PERCEPTION</p><h2>语音与手势感知</h2></div>
-        <span class="perception-state ${bridge.state === "CONNECTED" ? "active" : "waiting_for_events"}">${escapeHtml(bridge.state)}</span>
+        <div><p class="eyebrow">WEB VOICE · PRINTER ONLY</p><h2>网页语音与打印联动</h2></div>
+        <span class="link-state active">SIMPLIFIED</span>
       </div>
-      <div class="perception-layout">
-        <div class="perception-channels">
-          <div><i class="${perception.channels.audio.connected ? "live" : ""}">${icon("mic", 18)}</i><span><strong>Voice / ASR</strong><small>${escapeHtml(perception.channels.audio.protocol)}</small><b>${perception.channels.audio.connected ? "EVENT LIVE" : "WAITING"}</b></span></div>
-          <div><i class="${perception.channels.vision.connected ? "live" : ""}">${icon("spark", 18)}</i><span><strong>Gesture / MediaPipe</strong><small>${escapeHtml(perception.channels.vision.protocol)}</small><b>${perception.channels.vision.connected ? "EVENT LIVE" : "WAITING"}</b></span></div>
-          <p>Web 后端通过 <code>ws://${escapeHtml(new URL(bridge.baseUrl).host)}/api/events</code> 消费 desktop_bot 的 <code>command.*</code>，再把 DeepSeek 结果 POST 回 <code>/api/results</code>。音频 8081、图像 8082 仍只属于硬件感知层。</p>
-          <div class="bridge-contract"><span><b>WS 8090</b><small>sequence ${bridge.lastSequence ?? 0}</small></span><span><b>AI RESULT</b><small>POST /api/results</small></span><span><b>PHOTO</b><small>multipart + JPEG</small></span></div>
-          ${audioDiagnosticsPanel(perception, perceptionEvents)}
-          <div class="perception-actions"><button class="outline-button" data-perception-demo="voice">模拟“帮我写信”</button><button class="outline-button" data-perception-demo="gesture">模拟 V 手势</button><button class="text-button" data-perception-refresh>刷新事件</button></div>
+      <div class="printer-link-layout">
+        <div class="printer-link-channels">
+          <div><i class="live">${icon("mic", 18)}</i><span><strong>Browser Speech</strong><small>SpeechRecognition / webkitSpeechRecognition</small><b>WEB ONLY</b></span></div>
+          <div><i class="live">${icon("printer", 18)}</i><span><strong>ESP32 Printer</strong><small>POST /api/v1/printer/{text|content|letter}</small><b>HARDWARE OUTPUT</b></span></div>
+          <p>当前 Web 端不再接入板载麦克风 ASR、手势事件或摄像头回调。用户在浏览器里说话/输入后，后端调用 DeepSeek 做意图识别与整理；只有用户确认打印时，后端才把 384px 热敏位图或文本发送到 ESP32 打印机。</p>
+          <div class="bridge-contract"><span><b>VOICE</b><small>browser local input</small></span><span><b>AI</b><small>DeepSeek on server</small></span><span><b>PRINT</b><small>${escapeHtml(current.printer.status)} · ${escapeHtml(current.printer.paper)}</small></span></div>
         </div>
-        <div class="perception-feed"><div class="perception-feed-head"><strong>最新事件</strong><span>${perception.bufferedEvents} buffered</span></div>${perceptionEvents.items.length ? perceptionEvents.items.slice().reverse().map(perceptionEventRow).join("") : '<div class="perception-empty">等待设备产生第一条语音或手势事件。</div>'}</div>
+        <div class="printable-capability-feed"><div class="printable-capability-head"><strong>可打印能力</strong><span>384 px thermal</span></div>
+          ${["AI 对话回复", "今日计划 Todo", "单词学习卡片", "海龟汤故事", "Photo 2 Text 结果", "手帐总结", "趣味小卡", "AI Letter"].map((item) => `<div class="printable-capability"><i class="printable">${icon("printer", 15)}</i><span><strong>${item}</strong><small>生成预览后再确认打印，避免误出纸。</small></span><time>PRINT</time></div>`).join("")}
+        </div>
       </div>
     </article>
     <div class="device-content-grid">
@@ -906,8 +840,6 @@ function authView(type) {
 }
 
 async function render() {
-  if (hardwarePollTimer) window.clearTimeout(hardwarePollTimer);
-  hardwarePollTimer = null;
   const version = ++ui.renderVersion;
   const path = currentPath();
   const titles = {
@@ -951,184 +883,6 @@ async function render() {
     app.innerHTML = shell(`<div class="fatal-state">${icon("community", 32)}<h1>暂时无法连接社区</h1><p>${escapeHtml(detail)}</p><button class="primary-button" data-retry>重新加载</button></div>`, path);
     wire();
   }
-}
-
-function applyDesktopBotEvent(event) {
-  if (!event?.eventId || seenHardwareEvents.has(event.eventId)) return false;
-  seenHardwareEvents.add(event.eventId);
-  if (seenHardwareEvents.size > 300) seenHardwareEvents.delete(seenHardwareEvents.values().next().value);
-  const parameters = event.payload?.parameters ?? {};
-  if (event.eventType === "command.chat.start") {
-    ui.voiceListening = true;
-    ui.voiceResult = { intent: "CHAT", reply: "聆听中，请继续说出你的问题。", provider: "desktop_bot", requiresConfirmation: false };
-    return true;
-  }
-  if (event.eventType === "command.chat.ask") {
-    const question = String(parameters.question ?? "").trim();
-    if (question) companionStore.dispatch({ type: "message.add", message: { role: "user", content: question } });
-    ui.voiceListening = false;
-    ui.voiceProcessing = true;
-    ui.voiceTranscript = question;
-    return true;
-  }
-  if (event.eventType === "chat.completed") {
-    const answer = String(event.payload?.answer ?? event.payload?.reply ?? "").trim();
-    if (answer) companionStore.dispatch({ type: "message.add", message: { role: "assistant", content: answer } });
-    ui.voiceProcessing = false;
-    ui.voiceResult = {
-      intent: event.payload?.intent ?? "CHAT",
-      reply: answer || "AI 已完成处理。",
-      printable: event.payload?.printable ?? null,
-      requiresConfirmation: Boolean(event.payload?.requires_confirmation && event.payload?.printable),
-      provider: event.payload?.provider ?? "deepseek"
-    };
-    return true;
-  }
-  if (event.eventType === "command.letter.compose" || event.eventType === "letter.listening") {
-    ui.voiceMode = "letter";
-    ui.voiceRecipient = event.payload?.recipient ?? ui.voiceRecipient;
-    ui.voiceListening = true;
-    ui.voiceResult = { intent: "WRITE_LETTER", reply: event.payload?.message ?? "聆听中，请继续说出信件内容。", provider: "desktop_bot", requiresConfirmation: false };
-    return true;
-  }
-  if (event.eventType === "letter.content_buffered") {
-    ui.voiceMode = "letter";
-    ui.voiceListening = true;
-    ui.voiceResult = {
-      intent: "LETTER_CONTENT",
-      reply: event.payload?.message ?? `已记录 ${event.payload?.character_count ?? 0} 个字，可以继续说。`,
-      provider: "desktop_bot",
-      warning: event.payload?.clipped ? "VOICE_CONTENT_CLIPPED" : null,
-      requiresConfirmation: false
-    };
-    return true;
-  }
-  if (event.eventType === "letter.sending") {
-    ui.voiceListening = false;
-    ui.voiceProcessing = true;
-    ui.voiceSending = true;
-    ui.voiceResult = { intent: "SEND_LETTER", reply: event.payload?.message ?? "结束词已确认，正在发送信件。", provider: "desktop_bot", requiresConfirmation: false };
-    return true;
-  }
-  if (event.eventType === "letter.sent") {
-    ui.voiceMode = "default";
-    ui.voiceListening = false;
-    ui.voiceProcessing = false;
-    ui.voiceSending = false;
-    ui.voiceResult = { intent: "LETTER_SENT", reply: event.payload?.message ?? "信件已发送。", provider: event.payload?.provider ?? "desktop_bot", requiresConfirmation: false };
-    if (Date.now() - Number(event.timestampMs ?? 0) < 15_000) {
-      showLetterSendResult({
-        tone: "success",
-        title: "语音信件已发送",
-        message: event.payload?.message ?? "数字信件已经成功送达。",
-        detail: event.payload?.print_job ? "收件人的实体打印任务已经进入队列。" : "本次只完成数字送达。",
-        actionLabel: "知道了"
-      });
-    }
-    return true;
-  }
-  if (["letter.send_failed", "letter.recipient_required"].includes(event.eventType)) {
-    ui.voiceListening = true;
-    ui.voiceProcessing = false;
-    ui.voiceSending = false;
-    ui.voiceResult = { intent: "SEND_LETTER", reply: event.payload?.message ?? "信件尚未发送，请继续补充。", provider: "desktop_bot", warning: event.payload?.code ?? "VOICE_LETTER_SEND_FAILED", requiresConfirmation: false };
-    toast(event.payload?.message ?? "语音信件发送失败", "error");
-    return true;
-  }
-  if (event.eventType === "letter.draft_ready") {
-    ui.voiceMode = "letter_review";
-    ui.voiceListening = false;
-    ui.voiceResult = {
-      intent: "LETTER_CONTENT",
-      reply: event.payload?.message ?? "信件已经整理好，请确认后打印。",
-      printable: event.payload?.printable ?? null,
-      requiresConfirmation: true,
-      provider: event.payload?.provider ?? "deepseek"
-    };
-    return true;
-  }
-  if (event.eventType === "turtle.started") {
-    ui.voiceMode = "turtle";
-    ui.turtleVerdict = null;
-    ui.turtleLastAnswer = event.payload?.message ?? "海龟汤已开始。";
-    ui.turtleGame = {
-      id: event.payload?.id ?? `turtle-${event.eventId}`,
-      title: event.payload?.title ?? DEFAULT_TURTLE_GAME.title,
-      story: event.payload?.story ?? DEFAULT_TURTLE_GAME.story,
-      truth: event.payload?.truth ?? DEFAULT_TURTLE_GAME.truth,
-      rules: event.payload?.rules ?? DEFAULT_TURTLE_GAME.rules,
-      difficulty: event.payload?.difficulty ?? DEFAULT_TURTLE_GAME.difficulty,
-      provider: event.payload?.provider ?? "desktop_bot",
-      model: event.payload?.model ?? null,
-      history: [],
-      revealed: false,
-      loading: false
-    };
-    ui.voiceResult = { intent: "START_TURTLE_SOUP", reply: ui.turtleLastAnswer, provider: ui.turtleGame.provider, requiresConfirmation: false };
-    if (currentPath() !== "/entertainment") navigate("/entertainment");
-    return true;
-  }
-  if (event.eventType === "turtle.answered") {
-    ui.voiceMode = "turtle";
-    ui.turtleVerdict = event.payload?.verdict ?? "IRRELEVANT";
-    ui.turtleLastAnswer = event.payload?.message ?? event.payload?.answer ?? "已回答。";
-    const story = event.payload?.story ?? ui.turtleGame;
-    ui.turtleGame = {
-      ...ui.turtleGame,
-      ...story,
-      history: Array.isArray(event.payload?.history) ? event.payload.history : [
-        ...(ui.turtleGame.history ?? []),
-        {
-          question: event.payload?.question,
-          verdict: event.payload?.verdict,
-          answer: event.payload?.answer,
-          hint: event.payload?.hint,
-          provider: event.payload?.provider,
-          createdAt: new Date().toISOString()
-        }
-      ],
-      revealed: Boolean(ui.turtleGame.revealed || event.payload?.solved),
-      loading: false
-    };
-    ui.voiceResult = { intent: "START_TURTLE_SOUP", reply: ui.turtleLastAnswer, provider: event.payload?.provider ?? "desktop_bot", requiresConfirmation: false };
-    return currentPath() === "/entertainment";
-  }
-  if (event.eventType === "turtle.stopped") {
-    ui.voiceMode = "default";
-    ui.voiceResult = { intent: "CHAT", reply: event.payload?.message ?? "海龟汤已结束。", provider: "desktop_bot", requiresConfirmation: false };
-    toast(event.payload?.message ?? "海龟汤已结束");
-    return true;
-  }
-  if (event.eventType === "language.changed") {
-    toast(`设备语言已切换为 ${event.payload?.current === "en" ? "English" : "中文"}`, "success");
-    return false;
-  }
-  if (event.eventType === "photo.captured" || event.eventType === "photo.completed") {
-    const captureId = event.payload?.capture_id;
-    ui.photoPreview = event.payload?.downstream?.image_url || (captureId ? `/api/v1/hardware/photos/${captureId}.jpg` : ui.photoPreview);
-    ui.photoFileName = captureId ? `${captureId}.jpg` : ui.photoFileName;
-    return currentPath() === "/entertainment";
-  }
-  return false;
-}
-
-function startDesktopBotPolling() {
-  if (!["/education", "/entertainment", "/device"].includes(currentPath())) return;
-  const poll = async () => {
-    let changed = false;
-    try {
-      const data = await api.perceptionEvents(0);
-      for (const event of data.items ?? []) changed = applyDesktopBotEvent(event) || changed;
-    } catch {
-      // The browser UI stays usable while desktop_bot is offline.
-    }
-    if (changed && ["/education", "/entertainment"].includes(currentPath())) {
-      await render();
-      return;
-    }
-    hardwarePollTimer = window.setTimeout(poll, 1_500);
-  };
-  hardwarePollTimer = window.setTimeout(poll, 500);
 }
 
 function wireNavigation() {
@@ -1666,7 +1420,6 @@ async function submitTutor(question) {
 
 function wire() {
   wireNavigation();
-  startDesktopBotPolling();
   document.querySelector("[data-retry]")?.addEventListener("click", render);
   document.querySelectorAll("[data-category]").forEach((element) => element.addEventListener("click", () => {
     ui.category = element.dataset.category;
@@ -1849,9 +1602,9 @@ function wire() {
       render();
     } catch (error) { toast(error.message, "error"); }
   });
-  document.querySelector("[data-device-photo]")?.addEventListener("click", () => {
-    bus.send("device.command", { command: "camera.capture" });
-    toast("已请求桌面设备拍照");
+  document.querySelector("[data-print-ocr]")?.addEventListener("click", () => {
+    if (!ui.photoResult) return;
+    stagePrintable("note", "Photo 2 Text", `${ui.photoResult.extractedText}\n\nAI 总结\n${ui.photoResult.summary}`, {}, "OCR 结果已经排好版，请确认后打印。");
   });
   document.querySelector("[data-open-egg]")?.addEventListener("click", () => {
     companionStore.dispatch({ type: "egg.open" });
@@ -1880,6 +1633,13 @@ function wire() {
       }
     } catch (error) { toast(error.message, "error"); }
   });
+  document.querySelector("[data-print-journal]")?.addEventListener("click", () => {
+    const form = document.querySelector("#journal-form");
+    const title = form?.querySelector('[name="title"]')?.value || "今日手帐";
+    const body = form?.querySelector('[name="body"]')?.value || "";
+    const content = `${title}\n\n${body}\n\nAI 总结\n${ui.journalSummary}`;
+    stagePrintable("note", "手帐总结", content, {}, "手帐总结已经排好版，请确认后打印。");
+  });
   document.querySelector("#journal-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
@@ -1902,6 +1662,10 @@ function wire() {
       ui.fortuneResult = await api.fortune(values);
       render();
     } catch (error) { toast(error.message, "error"); }
+  });
+  document.querySelector("[data-print-fortune]")?.addEventListener("click", () => {
+    if (!ui.fortuneResult) return;
+    stagePrintable("note", ui.fortuneResult.title, `${ui.fortuneResult.reading}\n\n${ui.fortuneResult.disclaimer}`, {}, "趣味小卡已经排好版，请确认后打印。");
   });
 
   document.querySelectorAll("[data-write-to]").forEach((element) => element.addEventListener("click", () => {
@@ -2045,26 +1809,6 @@ function wire() {
     printerTestForm.elements.feedAfter.value = chinese ? "3" : "2";
     printerTestForm.elements.text.focus();
   }));
-  document.querySelector("[data-perception-refresh]")?.addEventListener("click", render);
-  document.querySelectorAll("[data-perception-demo]").forEach((button) => button.addEventListener("click", async () => {
-    const voice = button.dataset.perceptionDemo === "voice";
-    try {
-      await api.pushPerceptionEvent(voice ? {
-        event_type: "feature.write_letter",
-        source: "audio",
-        session_id: "bot",
-        payload: { keyword: "帮我写信", transcript: "小A，帮我写信", payload_text: "", audio_duration_seconds: 1.28 }
-      } : {
-        event_type: "mode.toggle",
-        source: "vision",
-        session_id: "bot",
-        payload: { label: "Victory", confidence: 0.96 }
-      });
-      toast(voice ? "已接收语音写信事件" : "已接收 V 手势模式切换事件", "success");
-      if (voice) navigate("/letter/create");
-      else render();
-    } catch (error) { toast(error.message, "error"); }
-  }));
   document.querySelector("[data-save-policy]")?.addEventListener("click", async (event) => {
     const mode = document.querySelector('input[name="policyMode"]:checked')?.value ?? "FRIENDS";
     const paused = document.querySelector("#print-paused")?.checked ?? false;
@@ -2148,3 +1892,4 @@ window.addEventListener("keydown", (event) => {
 
 render();
 bus.send("web.hello", { client: "ai-hub-os-web", version: "0.5.0" });
+

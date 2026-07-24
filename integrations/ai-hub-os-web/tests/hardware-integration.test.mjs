@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { handleApiRequest } from "../api/mock-api.mjs";
@@ -16,12 +16,6 @@ import {
   THERMAL_CONTENT_MAX_HEIGHT,
   THERMAL_CONTENT_WIDTH
 } from "../services/thermal-content.mjs";
-import {
-  acceptPerceptionEvent,
-  getPerceptionStatus,
-  listPerceptionEvents
-} from "../services/perception-gateway.mjs";
-import { DesktopBotBridge } from "../services/desktop-bot-bridge.mjs";
 
 test("thermal Letter uses the 384px hardware contract and packs one bit per pixel", async () => {
   const input = {
@@ -84,162 +78,6 @@ test("chat, todo and word content share safe 384px thermal pagination", async ()
     assert.ok(rendered.batches.every((batch) => batch.height <= THERMAL_CONTENT_MAX_HEIGHT));
     assert.ok(rendered.batches.every((batch) => batch.bitmap.length === 48 * batch.height));
   }
-});
-
-test("perception gateway accepts the desktop_bot event contract", () => {
-  const timestampMs = Date.now();
-  const accepted = acceptPerceptionEvent({
-    event_type: "feature.write_letter",
-    source: "audio",
-    timestamp_ms: timestampMs,
-    session_id: "bot",
-    payload: { transcript: "小A，帮我写信" }
-  });
-  assert.equal(accepted.eventType, "feature.write_letter");
-  assert.equal(listPerceptionEvents(timestampMs - 1).at(-1).payload.transcript, "小A，帮我写信");
-  assert.equal(getPerceptionStatus().channels.audio.connected, true);
-});
-
-test("desktop_bot bridge consumes command events once and posts AI results back", async () => {
-  const events = [];
-  const results = [];
-  const bridge = new DesktopBotBridge({
-    baseUrl: "http://desktop-bot.test:8090",
-    onEvent: (event) => events.push(event),
-    orchestrate: async (question) => ({
-      intent: "CHAT",
-      reply: `AI:${question}`,
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
-      requiresConfirmation: true,
-      printable: { kind: "chat", title: "对话", content: `AI:${question}` }
-    }),
-    fetchImpl: async (url, options) => {
-      results.push({ url, body: options?.body ? JSON.parse(options.body) : null });
-      return new Response(JSON.stringify({ status: "accepted", event_id: "result-1" }), { status: 202, headers: { "Content-Type": "application/json" } });
-    },
-    WebSocketImpl: null
-  });
-  const command = {
-    event_id: "event-chat-1",
-    sequence: 18,
-    schema_version: 1,
-    event_type: "command.chat.ask",
-    source: "controller",
-    timestamp_ms: Date.now(),
-    session_id: "bot",
-    payload: { parameters: { question: "为什么天空是蓝色的？", language: "zh" } }
-  };
-  await bridge.consume(command);
-  await bridge.consume(command);
-  assert.equal(events.length, 1);
-  assert.equal(results.length, 1);
-  assert.match(results[0].url, /\/api\/results$/);
-  assert.equal(results[0].body.event_type, "chat.completed");
-  assert.equal(results[0].body.payload.requires_confirmation, true);
-  assert.equal(bridge.status().lastSequence, 18);
-});
-
-test("desktop_bot microphone buffers a Letter and over sends it exactly once", async () => {
-  const results = [];
-  const deliveries = [];
-  const bridge = new DesktopBotBridge({
-    baseUrl: "http://desktop-bot.test:8090",
-    onEvent: () => {},
-    deliverLetter: async (payload) => {
-      deliveries.push(payload);
-      return {
-        letterId: "ltr-voice-1",
-        status: "SENT",
-        delivery: { status: "RECEIVED" },
-        printJob: { id: "pj-voice-1", status: "WAITING_DEVICE" },
-        recipient: { id: "usr-mom", displayName: "妈妈" },
-        provider: "deepseek"
-      };
-    },
-    fetchImpl: async (url, options) => {
-      results.push({ url, body: options?.body ? JSON.parse(options.body) : null });
-      return new Response(JSON.stringify({ status: "accepted" }), { status: 202, headers: { "Content-Type": "application/json" } });
-    },
-    WebSocketImpl: null
-  });
-  const speech = (id, transcript, sequence) => ({
-    event_id: id,
-    event_type: "speech.transcribed",
-    source: "audio",
-    session_id: "bot",
-    sequence,
-    schema_version: 1,
-    timestamp_ms: Date.now(),
-    payload: { transcript, matched_event: null }
-  });
-
-  await bridge.consume(speech("voice-start", "我要给妈妈写一封信", 1));
-  await bridge.consume(speech("voice-body", "最近天气变化大，你要记得照顾身体。", 2));
-  await bridge.consume(speech("voice-end", "over", 3));
-  await bridge.consume(speech("voice-end-duplicate", "结束", 4));
-
-  assert.equal(deliveries.length, 1);
-  assert.equal(deliveries[0].recipient, "妈妈");
-  assert.match(deliveries[0].body, /照顾身体/);
-  assert.ok(results.some((entry) => entry.body?.event_type === "letter.listening"));
-  assert.ok(results.some((entry) => entry.body?.event_type === "letter.content_buffered"));
-  assert.ok(results.some((entry) => entry.body?.event_type === "letter.sent"));
-  assert.ok(results.some((entry) => entry.body?.payload?.idempotent_replay === true));
-});
-
-test("desktop_bot microphone can start and play turtle soup through the Web bridge", async () => {
-  const results = [];
-  const bridge = new DesktopBotBridge({
-    baseUrl: "http://desktop-bot.test:8090",
-    aiHubBaseUrl: "http://aihub.test:18000",
-    onEvent: () => {},
-    fetchImpl: async (url, options) => {
-      const body = options?.body ? JSON.parse(options.body) : null;
-      if (String(url).endsWith("/api/v1/games/turtle-soup/start")) {
-        return new Response(JSON.stringify({
-          id: "turtle-test",
-          title: "打印机的早晨",
-          story: "桌上出现了一张没人手写的提醒。",
-          truth: "AI 桌面助手的定时任务自动打印了提醒。",
-          rules: "只能问 YES / NO 问题。",
-          provider: "deepseek",
-          model: "deepseek-v4-flash"
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (String(url).endsWith("/api/v1/games/turtle-soup/answer")) {
-        assert.match(body.question, /打印机/);
-        return new Response(JSON.stringify({
-          verdict: "YES",
-          answer: "是，和打印机自动打印有关。",
-          hint: "继续想是谁设置的。",
-          solved: false,
-          provider: "deepseek",
-          model: "deepseek-v4-flash"
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      results.push({ url, body });
-      return new Response(JSON.stringify({ status: "accepted" }), { status: 202, headers: { "Content-Type": "application/json" } });
-    },
-    WebSocketImpl: null
-  });
-  const speech = (id, transcript, sequence) => ({
-    event_id: id,
-    event_type: "speech.transcribed",
-    source: "audio",
-    session_id: "bot",
-    sequence,
-    schema_version: 1,
-    timestamp_ms: Date.now(),
-    payload: { transcript, matched_event: null }
-  });
-
-  await bridge.consume(speech("turtle-start", "我要玩海龟汤", 1));
-  await bridge.consume(speech("turtle-question", "是打印机自动打印的吗", 2));
-
-  assert.ok(results.some((entry) => entry.body?.event_type === "turtle.started"));
-  assert.ok(results.some((entry) => entry.body?.event_type === "turtle.answered"));
-  assert.equal(results.find((entry) => entry.body?.event_type === "turtle.answered").body.payload.verdict, "YES");
 });
 
 test("Letter printer feeds, sends bounded batches and replays idempotently", async () => {
@@ -316,3 +154,4 @@ test("Letter printer feeds, sends bounded batches and replays idempotently", asy
     else process.env.ESP_PRINTER_BASE_URL = priorPrinterUrl;
   }
 });
+

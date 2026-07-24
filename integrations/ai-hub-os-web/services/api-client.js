@@ -86,8 +86,6 @@ export const api = {
     body: JSON.stringify(payload)
   }),
   aiStatus: () => request("/ai/status"),
-  desktopBotBridgeStatus: () => request("/hardware/bridge/status"),
-  desktopBotState: () => request("/hardware/bridge/state"),
   tutor: (question, messages = []) => request("/ai/tutor", {
     method: "POST",
     body: JSON.stringify({ question, messages })
@@ -164,12 +162,6 @@ export const api = {
     method: "POST",
     headers: { "Idempotency-Key": payload.jobId ? `content-print-${payload.jobId}` : idempotencyKey() },
     body: JSON.stringify({ feedBefore: 3, feedAfter: 4, ...payload })
-  }),
-  perceptionStatus: () => request("/perception/status"),
-  perceptionEvents: (afterMs = 0) => request(`/perception/events?afterMs=${encodeURIComponent(afterMs)}`),
-  pushPerceptionEvent: (event) => request("/perception/events", {
-    method: "POST",
-    body: JSON.stringify(event)
   }),
   login: (email, password) => request("/auth/login", {
     method: "POST",

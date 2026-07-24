@@ -1,21 +1,14 @@
 import iconv from "iconv-lite";
-import { Readable } from "node:stream";
 import {
   renderThermalLetterBatches,
   thermalLetterPreviewDataUrl
 } from "../services/thermal-letter.mjs";
-import {
-  acceptPerceptionEvent,
-  getPerceptionStatus,
-  listPerceptionEvents
-} from "../services/perception-gateway.mjs";
 import { deepSeekChat, deepSeekConfig } from "../services/deepseek-client.mjs";
 import { orchestrateTranscript } from "../services/ai-orchestrator.mjs";
 import {
   renderThermalContentBatches,
   thermalContentPreviewDataUrl
 } from "../services/thermal-content.mjs";
-import { desktopBotBridge } from "../services/desktop-bot-bridge.mjs";
 
 const me = {
   id: "usr-lin",
@@ -36,16 +29,6 @@ const me = {
   letterRequestPolicy: "MATCHES",
   version: 3
 };
-
-async function desktopBotHealth() {
-  try {
-    const upstream = await fetch(`${desktopBotBridge.baseUrl}/api/health`, { signal: AbortSignal.timeout(3_000) });
-    if (!upstream.ok) return { available: false, error: `HEALTH_${upstream.status}` };
-    return { available: true, ...(await upstream.json()) };
-  } catch (error) {
-    return { available: false, error: error.message };
-  }
-}
 
 const users = [
   me,
@@ -217,7 +200,6 @@ const comments = {
 };
 
 const idempotency = new Map();
-const processedPhotos = new Map();
 
 function withUser(user) {
   return { ...user, relationship: user.id === "usr-chen" ? "FOLLOWING" : "NONE" };
@@ -275,16 +257,6 @@ async function readJson(request) {
   }
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-}
-
-async function readMultipart(request) {
-  const webRequest = new Request(`http://127.0.0.1${request.url}`, {
-    method: request.method,
-    headers: request.headers,
-    body: Readable.toWeb(request),
-    duplex: "half"
-  });
-  return webRequest.formData();
 }
 
 function page(items) {
@@ -591,80 +563,6 @@ export async function handleApiRequest(request, response, requestId) {
         capabilities: ["chat", "intent", "plan", "letter-polish", "summary"],
         requestId
       }, requestId);
-      return true;
-    }
-
-    if (method === "GET" && path === "/hardware/bridge/status") {
-      send(response, 200, { ...desktopBotBridge.status(), requestId }, requestId);
-      return true;
-    }
-
-    if (method === "GET" && path === "/hardware/bridge/state") {
-      try {
-        const upstream = await fetch(`${desktopBotBridge.baseUrl}/api/state`, { signal: AbortSignal.timeout(5_000) });
-        const state = await upstream.json();
-        send(response, upstream.ok ? 200 : 502, { state, bridge: desktopBotBridge.status(), requestId }, requestId);
-      } catch (error) {
-        const issue = problem(502, "DESKTOP_BOT_UNAVAILABLE", "desktop_bot unavailable", error.message, requestId);
-        send(response, issue.status, issue.body, requestId);
-      }
-      return true;
-    }
-
-    if (method === "POST" && path === "/hardware/photo/process") {
-      try {
-        const form = await readMultipart(request);
-        const metadataRaw = String(form.get("metadata") ?? "{}");
-        const metadata = JSON.parse(metadataRaw);
-        const image = form.get("image");
-        if (!image || typeof image.arrayBuffer !== "function" || image.type !== "image/jpeg") {
-          const issue = problem(415, "JPEG_REQUIRED", "JPEG image required", "desktop_bot must send the multipart image field as image/jpeg.", requestId);
-          send(response, issue.status, issue.body, requestId);
-          return true;
-        }
-        const bytes = Buffer.from(await image.arrayBuffer());
-        if (!bytes.length || bytes.length > 2_097_152) {
-          const issue = problem(413, "PHOTO_TOO_LARGE", "Photo is too large", "The photo processor accepts JPEG files up to 2 MiB.", requestId);
-          send(response, issue.status, issue.body, requestId);
-          return true;
-        }
-        const captureId = String(metadata.capture_id ?? request.headers["idempotency-key"] ?? crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
-        processedPhotos.set(captureId, { bytes, contentType: "image/jpeg", metadata, createdAt: Date.now() });
-        while (processedPhotos.size > 20) processedPhotos.delete(processedPhotos.keys().next().value);
-        send(response, 202, {
-          status: "accepted",
-          capture_id: captureId,
-          image_url: `/api/v1/hardware/photos/${captureId}.jpg`,
-          bytes: bytes.length,
-          processing: "stored_for_photo_2_text",
-          requestId
-        }, requestId);
-      } catch (error) {
-        const issue = problem(400, "PHOTO_MULTIPART_INVALID", "Invalid photo upload", error.message, requestId);
-        send(response, issue.status, issue.body, requestId);
-      }
-      return true;
-    }
-
-    const hardwarePhotoMatch = path.match(/^\/hardware\/photos\/([a-zA-Z0-9_-]+)\.jpg$/);
-    if (method === "GET" && hardwarePhotoMatch) {
-      const captureId = hardwarePhotoMatch[1];
-      const stored = processedPhotos.get(captureId);
-      if (stored) {
-        response.writeHead(200, { "Content-Type": stored.contentType, "Cache-Control": "private, max-age=300", "X-Request-ID": requestId });
-        response.end(stored.bytes);
-        return true;
-      }
-      try {
-        const upstream = await fetch(`${desktopBotBridge.baseUrl}/api/photos/${captureId}.jpg`, { signal: AbortSignal.timeout(5_000) });
-        if (!upstream.ok) throw new Error(`PHOTO_${upstream.status}`);
-        const bytes = Buffer.from(await upstream.arrayBuffer());
-        response.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=60", "X-Request-ID": requestId });
-        response.end(bytes);
-      } catch {
-        const issue = problem(404, "PHOTO_NOT_FOUND", "Photo not found", "The requested desktop_bot capture is unavailable.", requestId);
-        send(response, issue.status, issue.body, requestId);
-      }
       return true;
     }
 
@@ -1134,40 +1032,6 @@ export async function handleApiRequest(request, response, requestId) {
         send(response, 202, responseBody, requestId);
       } catch (error) {
         const issue = problem(502, "LETTER_PRINTER_UNAVAILABLE", "Letter printer unavailable", `Could not render or dispatch the 384px letter: ${error.message}`, requestId);
-        send(response, issue.status, issue.body, requestId);
-      }
-      return true;
-    }
-
-    if (method === "GET" && path === "/perception/status") {
-      const health = await desktopBotHealth();
-      send(response, 200, { ...getPerceptionStatus(), desktopBot: health, requestId }, requestId);
-      return true;
-    }
-
-    if (method === "GET" && path === "/perception/events") {
-      const afterMs = Math.max(0, Number(url.searchParams.get("afterMs") ?? 0) || 0);
-      send(response, 200, page(listPerceptionEvents(afterMs)), requestId);
-      return true;
-    }
-
-    if (method === "POST" && path === "/perception/events") {
-      const body = await readJson(request);
-      try {
-        const event = acceptPerceptionEvent(body);
-        const transcript = String(event.payload?.transcript ?? event.payload?.payload_text ?? "").trim();
-        const eventPrompts = {
-          "feature.write_letter": "我要写一封信",
-          "feature.print_plan": "帮我打印今日计划",
-          "feature.play_turtle_soup": "我要玩海龟汤"
-        };
-        const decisionInput = transcript || eventPrompts[event.eventType];
-        const decision = event.source === "audio" && decisionInput
-          ? await orchestrateTranscript(decisionInput, body.context ?? {})
-          : null;
-        send(response, 202, { event, decision, requiresUserConfirmation: Boolean(decision?.requiresConfirmation), requestId }, requestId);
-      } catch (error) {
-        const issue = problem(422, "INVALID_PERCEPTION_EVENT", "Invalid perception event", error.message, requestId);
         send(response, issue.status, issue.body, requestId);
       }
       return true;

@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { handleApiRequest } from "../api/mock-api.mjs";
@@ -229,24 +229,4 @@ test("voice Letter finish sends once with a stable idempotency key", async () =>
   });
 });
 
-test("desktop_bot multipart photo callback is accepted and can be displayed", async () => {
-  await withApi(async (baseUrl) => {
-    const form = new FormData();
-    form.set("metadata", JSON.stringify({ capture_id: "abcdef0123456789abcdef0123456789", session_id: "bot" }));
-    form.set("image", new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" }), "capture.jpg");
-    const accepted = await fetch(`${baseUrl}/hardware/photo/process`, {
-      method: "POST",
-      headers: { "Idempotency-Key": "abcdef0123456789abcdef0123456789" },
-      body: form
-    });
-    const body = await accepted.json();
-    assert.equal(accepted.status, 202);
-    assert.equal(body.status, "accepted");
-    assert.match(body.image_url, /hardware\/photos/);
 
-    const image = await fetch(`${baseUrl}/hardware/photos/abcdef0123456789abcdef0123456789.jpg`);
-    assert.equal(image.status, 200);
-    assert.equal(image.headers.get("content-type"), "image/jpeg");
-    assert.equal((await image.arrayBuffer()).byteLength, 4);
-  });
-});
