@@ -83,7 +83,8 @@ GET /api/photos/{capture_id}.jpg
 
 聊天程序订阅 `command.chat.start`、`command.chat.ask` 和
 `command.chat.stop`；网站订阅 `language.changed`、`photo.captured`、
-`photo.completed` 以及聊天程序返回的结果事件。事件都带有 `event_id`、
+`photo.printed`、`photo.print_failed`、`photo.completed` 以及聊天程序返回的
+结果事件。事件都带有 `event_id`、
 `sequence` 和 `schema_version`，消费方应按 `event_id` 去重。
 功能程序完成任务后向 `/api/results` 提交 `event_type`、`session_id` 和
 `payload`，结果会进入同一事件流并实时推送给网站。
@@ -107,7 +108,7 @@ python -m app \
 
 每个 ASR 转写都会以 JSON 写入控制台和 `logs/perception.log`，包括未命中关键词
 并被丢弃的普通文本。有效感知事件会另外输出一条事件日志。事件缓存在进程内，
-不会保存原始 PCM、WAV、JPEG 或 RGB 历史。
+不会保存原始 PCM、WAV 或 RGB 历史；触发拍照打印后会保存对应 JPEG。
 
 ## 硬件协议
 
@@ -135,16 +136,17 @@ python -m scripts.receive_images
 
 ## 配置
 
-[config.yaml](config.yaml) 包含当前运行时使用的九部分：
+[config.yaml](config.yaml) 包含当前运行时使用的十部分：
 
 - `audio`：采样率；
 - `asr`：Faster Whisper 模型和推理设备；
 - `hardware`：监听地址、端口和开关；
 - `vad`：语音检测与断句阈值；
-- `keywords`：唤醒、模式切换和写信关键词；
+- `keywords`：唤醒、模式切换、写信和拍照打印关键词；
 - `perception`：事件缓存、语句队列和视觉 FPS；
 - `vision`：MediaPipe 模型、尺寸和稳定检测策略。
-- `application`：默认语言、2 秒拍照、照片目录和下游处理地址；
+- `application`：默认语言、1 秒拍照、照片目录和下游处理地址；
+- `printer`：打印机地址、384 像素图像参数、超时和 2 秒冷却；
 - `api`：HTTP/WebSocket 集成接口。
 
 尚未确定的语音入口可以添加到 `keywords.custom`。例如
@@ -152,6 +154,11 @@ python -m scripts.receive_images
 
 当前是 ASR 后关键词检测，因此每段有效人声都会执行一次 ASR。关键词负责开启或
 退出功能；聊天模式中的普通转写会被路由给聊天处理程序。
+
+识别到“拍照”“照相”“打印照片”“photo”“take a photo”等短语，或稳定检测到
+`Victory` 手势后，会启动同一个照片打印流程：等待 1 秒，取届时最新相机帧，
+灰度化并像素化，然后调用 `{printer.base_url}/printer/image`。`Open_Palm`
+用于切换中英文。打印任务和随后的 2 秒冷却期间会忽略重复触发，不建立队列。
 
 ## 测试
 
@@ -166,7 +173,8 @@ python -m scripts.receive_images
 - 关键词优先级与闲聊过滤；
 - 事件缓存容量和 TTL；
 - 音频事件主链路；
-- 视觉手势稳定触发和重新武装。
+- 视觉手势稳定触发和重新武装；
+- 打印图像转换、位图协议、触发去重和失败恢复。
 
 ## 目录
 

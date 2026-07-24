@@ -607,6 +607,7 @@ PerceptionEvent(
 - `mode.enter_chat`
 - `mode.exit_chat`
 - `feature.write_letter`
+- `feature.photo_print`
 
 视觉：
 
@@ -616,8 +617,21 @@ PerceptionEvent(
 - `gesture.open_palm`
 
 控制器会进一步产生 `command.chat.*`、`command.language.set`、
-`command.camera.capture_after` 和其他 `command.*` 事件。Open Palm 会启动独立
-的 2 秒倒计时，保存届时最新 JPEG，并可通过 multipart HTTP 上传到照片处理程序。
+`command.camera.capture_after` 和其他 `command.*` 事件。`Victory` 或
+`feature.photo_print` 会启动同一个照片打印任务；`Open_Palm` 切换中英文。
+
+照片打印任务等待 1 秒后保存届时最新 JPEG，再在内存中按打印机配置执行 EXIF
+方向修正、灰度、亮度/对比度、像素化、灰度量化和 1-bit 抖动。位图宽度默认
+384 像素，过长图像以最多 1200 像素高度分块，依次发送到：
+
+```text
+POST {printer.base_url}/printer/image?width=...&height=...
+Content-Type: application/octet-stream
+```
+
+成功产生 `photo.captured`、`photo.printed` 和 `photo.completed`。打印功能关闭、
+超时、连接失败或非 2xx 响应产生 `photo.print_failed`。整个任务以及结束后的
+2 秒冷却共用一个任务锁，期间新的语音或 Victory 触发会被忽略，不进入队列。
 
 ### 10.2 EventCache
 
@@ -661,7 +675,8 @@ INFO desktop_assistant.perception perception event <JSON>
 | WebSocket `/api/events` | 网站、功能程序 | 实时事件和 `command.*` |
 | HTTP `/api/events` | 网站、功能程序 | 按 sequence 补取历史事件 |
 | POST `/api/results` | 聊天和其他功能程序 | 回传回答、任务状态和功能结果 |
-| HTTP `/api/photos/{id}.jpg` | 网站、功能程序 | Open Palm 拍摄的 JPEG |
+| HTTP `/api/photos/{id}.jpg` | 网站、功能程序 | 语音或 Victory 触发保存的 JPEG |
+| HTTP `{printer.base_url}/printer/image` | 打印机固件 | 灰度像素化后的 1-bit 分块位图 |
 
 TCP 音频发送端当前不会收到识别文本或业务响应。
 
@@ -673,7 +688,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 - 信件草稿；
 - 设备控制指令；
 - 数据库或 JSON 事件文件；
-- 原始音频自动落盘（Open Palm 触发的照片会落盘）。
+- 原始音频自动落盘（语音或 Victory 触发的照片会落盘）。
 
 ## 12. Metrics 和 health
 
@@ -759,7 +774,8 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | --- | --- |
 | `app/control/application_controller.py` | 聊天状态、语言状态和感知事件到功能命令的路由 |
 | `app/events/event_bus.py` | 对网站和其他消费者广播实时事件 |
-| `app/features/photo_capture.py` | 最新帧存储、2 秒异步拍照、本地原子保存和下游上传 |
+| `app/features/photo_capture.py` | 最新帧存储、1 秒异步拍照、打印协调、冷却、本地保存和下游上传 |
+| `app/features/thermal_printer.py` | 灰度像素化、1-bit 位图打包、分块和打印机 HTTP 客户端 |
 | `app/api/server.py` | health、state、历史事件、照片和 WebSocket 接口 |
 
 ### 13.7 Transport
@@ -796,6 +812,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 | `tests/test_config.py` | 配置默认值、仓库配置和非法配置测试 |
 | `tests/test_vad_stream.py` | VAD 断句、静音、最长语句和真实 Silero smoke test |
 | `tests/test_perception_runtime.py` | 关键词、缓存、音频主链路和视觉稳定事件测试 |
+| `tests/test_thermal_printer.py` | 打印图像、位图位序、分块和 HTTP 协议测试 |
 
 ## 14. 当前边界和后续接入点
 
