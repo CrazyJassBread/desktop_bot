@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
@@ -60,10 +59,14 @@ def llm_server():
     server.server_close()
 
 
-def make_client(base_url: str) -> OpenAICompatibleClient:
+def make_client(
+    base_url: str,
+    *,
+    api_key: str = "sentinel-secret",
+) -> OpenAICompatibleClient:
     return OpenAICompatibleClient(
         base_url=base_url,
-        api_key_env="TEST_LLM_KEY",
+        api_key=api_key,
         model="test-model",
         timeout_seconds=1,
         temperature=0.4,
@@ -72,8 +75,7 @@ def make_client(base_url: str) -> OpenAICompatibleClient:
 
 
 @pytest.mark.asyncio
-async def test_client_posts_openai_compatible_request(llm_server, monkeypatch):
-    monkeypatch.setenv("TEST_LLM_KEY", "sentinel-secret")
+async def test_client_posts_openai_compatible_request(llm_server):
     client = make_client(llm_server["url"] + "/v1")
 
     answer = await client.complete(
@@ -98,22 +100,28 @@ async def test_client_posts_openai_compatible_request(llm_server, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_client_requires_configured_api_key(monkeypatch):
-    monkeypatch.delenv("TEST_LLM_KEY", raising=False)
-
+async def test_client_requires_configured_api_key():
     with pytest.raises(LLMError) as captured:
-        await make_client("http://127.0.0.1:1").complete(
+        await make_client(
+            "http://127.0.0.1:1",
+            api_key="",
+        ).complete(
             system_prompt="system",
             user_prompt="user",
         )
 
     assert captured.value.reason == "api_key_missing"
-    assert "TEST_LLM_KEY" not in str(captured.value)
+    assert "sentinel-secret" not in str(captured.value)
+
+
+def test_client_representation_does_not_expose_api_key():
+    client = make_client("https://example.test/v1")
+
+    assert "sentinel-secret" not in repr(client)
 
 
 @pytest.mark.asyncio
-async def test_client_maps_http_failure(llm_server, monkeypatch):
-    monkeypatch.setenv("TEST_LLM_KEY", "secret")
+async def test_client_maps_http_failure(llm_server):
     llm_server["status"][0] = 500
 
     with pytest.raises(LLMError) as captured:
@@ -138,10 +146,8 @@ async def test_client_maps_http_failure(llm_server, monkeypatch):
 )
 async def test_client_rejects_invalid_responses(
     llm_server,
-    monkeypatch,
     body,
 ):
-    monkeypatch.setenv("TEST_LLM_KEY", "secret")
     llm_server["body"][0] = body
 
     with pytest.raises(LLMError) as captured:

@@ -14,6 +14,7 @@ from app.audio.stream_pipeline import StreamingAudioPipeline
 from app.audio.vad.mock_backend import MockVADBackend
 from app.config import (
     KeywordConfig,
+    LLMProviderConfig,
     PerceptionConfig,
     VADConfig,
     VisionConfig,
@@ -358,8 +359,11 @@ async def test_build_daemon_wires_enabled_llm_components(
 ):
     config = load_config()
     config.llm.enabled = True
-    config.llm.base_url = "https://example.test/v1"
-    config.llm.model = "test-model"
+    config.llm.provider = LLMProviderConfig(
+        base_url="https://example.test/v1",
+        model="test-model",
+        api_key="sentinel-secret",
+    )
     config.llm.log_path = str(tmp_path / "llm.log")
     monkeypatch.setattr(
         "app.hardware_main.build_vad",

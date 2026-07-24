@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import socket
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -23,14 +22,14 @@ class OpenAICompatibleClient:
         self,
         *,
         base_url: str,
-        api_key_env: str,
+        api_key: str,
         model: str,
         timeout_seconds: float,
         temperature: float,
         max_output_tokens: int,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.api_key_env = api_key_env
+        self._api_key = api_key
         self.model = model
         self.timeout_seconds = timeout_seconds
         self.temperature = temperature
@@ -38,10 +37,13 @@ class OpenAICompatibleClient:
 
     @classmethod
     def from_config(cls, config: LLMConfig) -> "OpenAICompatibleClient":
+        provider = config.provider
+        if provider is None:
+            raise LLMError("api_key_missing")
         return cls(
-            base_url=config.base_url,
-            api_key_env=config.api_key_env,
-            model=config.model,
+            base_url=provider.base_url,
+            api_key=provider.api_key,
+            model=provider.model,
             timeout_seconds=config.timeout_seconds,
             temperature=config.temperature,
             max_output_tokens=config.max_output_tokens,
@@ -53,7 +55,7 @@ class OpenAICompatibleClient:
         system_prompt: str,
         user_prompt: str,
     ) -> str:
-        api_key = os.environ.get(self.api_key_env, "").strip()
+        api_key = self._api_key.strip()
         if not api_key:
             raise LLMError("api_key_missing")
         return await asyncio.to_thread(
