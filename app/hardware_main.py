@@ -121,8 +121,8 @@ def build_daemon(
             build_vad(config),
             config.audio.target_sample_rate,
         )
-        if config.llm.enabled:
-            llm_detector = LLMModeDetector(config.llm.modes)
+        llm_detector = LLMModeDetector(config.llm.modes)
+        if config.llm.available:
             llm_session_manager = LLMSessionManager(
                 config.llm,
                 OpenAICompatibleClient.from_config(config.llm),
@@ -192,6 +192,7 @@ def build_daemon(
         default_language=config.application.default_language,
         photo_manager=photo_manager,
         llm_session_manager=llm_session_manager,
+        llm_unavailable_reason=config.llm.unavailable_reason,
     )
 
     daemon = PerceptionDaemon(

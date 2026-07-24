@@ -29,10 +29,12 @@ class ApplicationController:
         default_language: str = "zh",
         photo_manager: object | None = None,
         llm_session_manager: object | None = None,
+        llm_unavailable_reason: str | None = None,
     ) -> None:
         self.state = AppState(language=default_language)
         self.photo_manager = photo_manager
         self.llm_session_manager = llm_session_manager
+        self.llm_unavailable_reason = llm_unavailable_reason
         self._emit: EventEmitter | None = None
 
     def set_event_emitter(self, emitter: EventEmitter) -> None:
@@ -51,12 +53,30 @@ class ApplicationController:
         self,
         event: PerceptionEvent,
     ) -> tuple[PerceptionEvent, ...]:
+        if event.event_type in {"llm.letter.start", "llm.qa.start"}:
+            if self.llm_session_manager is not None:
+                return await getattr(
+                    self.llm_session_manager,
+                    "handle",
+                )(event)
+            if self.llm_unavailable_reason is not None:
+                mode = (
+                    "letter"
+                    if event.event_type == "llm.letter.start"
+                    else "qa"
+                )
+                return (
+                    self._result(
+                        "llm.session_rejected",
+                        event,
+                        {
+                            "mode": mode,
+                            "reason": self.llm_unavailable_reason,
+                        },
+                    ),
+                )
         if self.llm_session_manager is not None:
-            if event.event_type in {
-                "llm.letter.start",
-                "llm.qa.start",
-                "speech.transcribed",
-            }:
+            if event.event_type == "speech.transcribed":
                 return await getattr(
                     self.llm_session_manager,
                     "handle",

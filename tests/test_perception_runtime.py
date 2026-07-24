@@ -353,6 +353,40 @@ async def test_controller_delegates_llm_and_suppresses_only_audio_intents():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason", "event_type", "mode"),
+    [
+        ("not_configured", "llm.letter.start", "letter"),
+        ("disabled", "llm.qa.start", "qa"),
+    ],
+)
+async def test_controller_rejects_unavailable_llm_mode(
+    reason,
+    event_type,
+    mode,
+):
+    controller = ApplicationController(
+        llm_unavailable_reason=reason,
+    )
+
+    rejected = await controller.handle(
+        PerceptionEvent(event_type, "audio", session_id="bot")
+    )
+    ordinary = await controller.handle(
+        PerceptionEvent("gesture.open_palm", "vision", session_id="bot")
+    )
+
+    assert len(rejected) == 1
+    assert rejected[0].event_type == "llm.session_rejected"
+    assert rejected[0].payload["mode"] == mode
+    assert rejected[0].payload["reason"] == reason
+    assert [event.event_type for event in ordinary] == [
+        "command.language.set",
+        "language.changed",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_build_daemon_wires_enabled_llm_components(
     monkeypatch,
     tmp_path,
@@ -386,6 +420,35 @@ async def test_build_daemon_wires_enabled_llm_components(
     assert controller is not None
     assert controller.llm_session_manager is not None
     await controller.aclose()
+
+
+@pytest.mark.asyncio
+async def test_build_daemon_detects_but_rejects_unconfigured_llm(
+    monkeypatch,
+):
+    config = load_config()
+    config.llm.enabled = True
+    monkeypatch.setattr(
+        "app.hardware_main.build_vad",
+        lambda _config: MockVADBackend([]),
+    )
+    monkeypatch.setattr(
+        "app.hardware_main.build_asr",
+        lambda _config: SequenceASR([]),
+    )
+
+    daemon, gesture_backend = build_daemon(
+        config,
+        build_parser().parse_args(["--audio-only"]),
+    )
+
+    assert gesture_backend is None
+    assert daemon.audio_processor is not None
+    assert daemon.audio_processor.llm_detector is not None
+    controller = daemon.application_controller
+    assert controller is not None
+    assert controller.llm_session_manager is None
+    assert controller.llm_unavailable_reason == "not_configured"
 
 
 @pytest.mark.asyncio
