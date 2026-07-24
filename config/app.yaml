@@ -108,7 +108,7 @@ printer:
   cooldown_seconds: 2.0
 
 llm:
-  enabled: false
+  enabled: true
   timeout_seconds: 60
   temperature: 0.4
   max_output_tokens: 2000

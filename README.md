@@ -1,28 +1,41 @@
-# AI Bot 持续感知服务
+# AI Bot
 
-这是一个面向 Bot 硬件的轻量多模态感知与功能控制进程。它持续接收音频和图像，
-产生结构化事件，并把事件路由为聊天、拍照和语言切换命令：
+AI Bot 是一个面向桌面机器人硬件的持续感知与交互服务。它接收麦克风音频和
+摄像头图像，完成语音活动检测、语音识别、关键词/会话路由、手势识别、LLM
+问答与写信，并通过 HTTP/WebSocket API 向其他程序发布结构化事件。
+
+## 主要功能
+
+- 音频：接收 Bot 的 TCP PCM，或在 `mic-test` 模式下使用电脑麦克风。
+- 语音处理：Silero VAD 断句，Faster Whisper 中文 ASR。
+- LLM：支持 OpenAI-compatible API、智能问答和写信会话。
+- 视觉：接收 Bot 上传的 JPEG，使用 MediaPipe 识别稳定手势。
+- 照片：语音或 `Victory` 手势触发延迟拍照、图像处理和热敏打印。
+- API：提供健康状态、应用状态、事件历史、WebSocket 事件流和照片访问。
+- 日志：感知事件与 LLM 会话分别写入独立日志。
+
+核心数据流：
 
 ```text
-TCP PCM → VAD → ASR → 关键词/聊天路由 ┐
-                                       ├→ ApplicationController → WebSocket
-HTTP JPEG → MediaPipe → 稳定手势 ──────┘                       ├→ 功能程序
-Open Palm → 异步等待 2 秒 → 最新 JPEG → AI 照片处理程序         └→ 网站
+Bot TCP PCM / 电脑麦克风
+        → Silero VAD → Faster Whisper → 关键词/LLM 会话
+                                              │
+Bot HTTP JPEG → MediaPipe → 稳定手势 ─────────┤
+                                              ↓
+                                ApplicationController
+                                              ↓
+                              Event API / 照片 / 打印机
 ```
 
-未进入聊天时，普通转写只作为 `speech.transcribed` 事件保留而不触发功能；进入
-聊天后，普通转写会成为 `command.chat.ask`。网站和其他程序可以通过
-`ws://<bot>:8090/api/events` 实时消费事件。
+## 环境要求
 
-文档：
+- Python 3.11+
+- macOS、Linux 或 Windows
+- 使用电脑麦克风时，需要允许终端或 Python 访问麦克风
+- 使用视觉功能时，需要 MediaPipe 手势模型
+- 默认 ASR 配置需要本地 Faster Whisper 模型
 
-- [App 完整工作 Pipeline](docs/app-pipeline.md)：启动、信号来源、传输过程、
-  最终输出和逐文件职责；
-- [持续感知 Runtime](docs/perception-runtime.md)：核心运行策略和事件格式。
-
-## 环境
-
-项目要求 Python 3.11+：
+创建环境并安装依赖：
 
 ```bash
 python -m venv .venv
@@ -30,160 +43,224 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-测试依赖：
+安装测试依赖：
 
 ```bash
 pip install -r requirements-dev.txt
 ```
 
-模型文件不提交到 Git。默认配置使用：
+默认配置期望以下模型文件存在：
 
-- `models/faster-whisper-small/`
-- `models/gesture_recognizer.task`
+```text
+models/faster-whisper-small/
+models/gesture_recognizer.task
+```
 
-## 运行
+模型文件不会提交到 Git。可以在 `config/app.yaml` 中修改 ASR 和手势模型路径。
 
-同时启动音频和视觉：
+## 配置
+
+公开配置位于 `config/app.yaml`，主要包括：
+
+- `audio`、`vad`、`asr`：采样率、断句和语音识别；
+- `hardware`：Bot 音频和图像监听地址；
+- `vision`：图像尺寸、手势模型和稳定检测参数；
+- `keywords`：唤醒词、聊天、拍照和自定义命令；
+- `llm`：LLM 开关、会话限制和语音控制短语；
+- `application`、`printer`：照片处理和打印；
+- `api`：HTTP/WebSocket 服务。
+
+### 配置 LLM
+
+复制私密配置模板：
+
+```bash
+cp config/llm.example.yaml config/llm.yaml
+```
+
+填写 OpenAI-compatible 服务信息：
+
+```yaml
+base_url: https://provider.example/v1
+model: provider-model-name
+api_key: your-api-key
+```
+
+然后确认 `config/app.yaml` 中：
+
+```yaml
+llm:
+  enabled: true
+```
+
+`config/llm.yaml` 已被 Git 忽略。不要把 API key 写入公开配置、代码或日志。
+
+## 运行方式
+
+### 完整 Bot 模式
+
+启动音频、视觉和 API：
 
 ```bash
 python -m app
 ```
 
-兼容入口：
-
-```bash
-python -m app.hardware_main
-```
-
-只启动一个通道：
+仅启动一个输入通道：
 
 ```bash
 python -m app --audio-only
 python -m app --vision-only
 ```
 
-打开 Vision 实时测试窗口：
-
-```bash
-python -m app test
-```
-
-## 功能团队接入
-
-默认 API 监听 `8090`：
-
-```text
-GET /api/health
-GET /api/state
-GET /api/events?after_sequence=0
-WS  /api/events
-POST /api/results
-GET /api/photos/{capture_id}.jpg
-```
-
-聊天程序订阅 `command.chat.start`、`command.chat.ask` 和
-`command.chat.stop`；网站订阅 `language.changed`、`photo.captured`、
-`photo.printed`、`photo.print_failed`、`photo.completed` 以及聊天程序返回的
-结果事件。事件都带有 `event_id`、
-`sequence` 和 `schema_version`，消费方应按 `event_id` 去重。
-功能程序完成任务后向 `/api/results` 提交 `event_type`、`session_id` 和
-`payload`，结果会进入同一事件流并实时推送给网站。
-
-AI 照片程序的 multipart HTTP 地址配置在
-`application.photo_processor_url`。请求包含 `metadata` JSON、`image` JPEG 和
-`Idempotency-Key: <capture_id>`。如果暂时不配置地址，照片仍会原子保存到
-`application.photo_output_dir` 并产生可供网站获取的事件。
-
-该模式只启动 Vision 接收端，不启动 Audio Runtime。窗口显示最新画面、单帧手势、
-置信度和稳定事件。按 `q`、`Esc` 或关闭窗口退出。可通过 `--scale 1.5` 调整
-窗口尺寸。
-
-覆盖监听地址：
+覆盖监听地址或端口：
 
 ```bash
 python -m app \
-  --audio-host 192.168.1.10 --audio-port 8080 \
-  --vision-host 192.168.1.10 --vision-port 8081
+  --audio-host 0.0.0.0 --audio-port 8080 \
+  --vision-host 0.0.0.0 --vision-port 8081
 ```
 
-每个 ASR 转写都会以 JSON 写入控制台和 `logs/perception.log`，包括未命中关键词
-并被丢弃的普通文本。有效感知事件会另外输出一条事件日志。事件缓存在进程内，
-不会保存原始 PCM、WAV 或 RGB 历史；触发拍照打印后会保存对应 JPEG。
+### 使用电脑麦克风测试 LLM
 
-## 硬件协议
+列出输入设备：
+
+```bash
+python -m app mic-test --list-input-devices
+```
+
+使用系统默认麦克风：
+
+```bash
+python -m app mic-test
+```
+
+按编号或名称选择设备：
+
+```bash
+python -m app mic-test --input-device 2
+python -m app mic-test --input-device "MacBook Microphone"
+```
+
+`mic-test` 只启用音频链路，不监听 Bot 音频端口，也不启动视觉输入。按
+`Ctrl+C` 停止。
+
+### Vision 实时测试
+
+```bash
+python -m app test
+python -m app test --vision-port 9000 --scale 1.5
+```
+
+Bot 向显示的 `/upload` 地址发送 JPEG。按 `q`、`Esc` 或关闭窗口退出。
+
+## 语音交互
+
+LLM 问答流程：
+
+```text
+你：进入问答模式
+你：请介绍强化学习的基本概念
+你：小A，请回答
+```
+
+取消问答：
+
+```text
+你：小A，取消问答
+```
+
+写信流程：
+
+```text
+你：我要给小明写信
+你：正文：谢谢你最近的帮助
+你：小A，完成写信
+```
+
+取消写信：
+
+```text
+你：小A，取消写信
+```
+
+LLM 会话控制短语要求单独说出。若 ASR 把多句话合并为一个长句，请降低环境噪声、
+靠近麦克风，或调整 `config/app.yaml` 中的 VAD 阈值和最大语句时长。
+
+项目还保留一套不调用内置 LLM 的普通聊天事件：
+
+- `进入聊天模式`、`开始聊天`、`智能问答`：产生 `command.chat.start`；
+- `退出聊天模式`、`结束聊天`、`返回普通模式`：产生
+  `command.chat.stop`。
+
+普通聊天事件需要外部聊天程序消费；它与 `进入问答模式` 启动的内置 LLM 会话
+不同。
+
+## Bot 输入协议
 
 音频：
 
 - TCP `0.0.0.0:8080`
-- 16 kHz
-- 单声道
-- signed 16-bit little-endian PCM
-- Silero 每帧 512 samples
+- 16 kHz、单声道、signed 16-bit little-endian PCM
+- 每个 VAD 帧 512 samples
 
-视觉：
+图像：
 
 - HTTP `POST http://0.0.0.0:8081/upload`
-- 请求体为原始 JPEG
-- 默认尺寸严格为 640×480
-- 接收端只保留最新一张待处理图片
+- `Content-Type: image/jpeg`
+- 默认尺寸 640 × 480
+- 默认最大 2 MiB
 
-固件协议可分别使用以下脚本验证：
+固件输入可以分别用以下诊断工具验证：
 
 ```bash
 python -m scripts.receive_microphone
 python -m scripts.receive_images
 ```
 
-## 配置
+## API
 
-[config/app.yaml](config/app.yaml) 包含当前运行时使用的十一部分：
+默认 API 地址为 `http://127.0.0.1:8090`：
 
-- `audio`：采样率；
-- `asr`：Faster Whisper 模型和推理设备；
-- `hardware`：监听地址、端口和开关；
-- `vad`：语音检测与断句阈值；
-- `keywords`：唤醒、模式切换、写信和拍照打印关键词；
-- `perception`：事件缓存、语句队列和视觉 FPS；
-- `vision`：MediaPipe 模型、尺寸和稳定检测策略。
-- `application`：默认语言、1 秒拍照、照片目录和下游处理地址；
-- `printer`：打印机地址、384 像素图像参数、超时和 2 秒冷却；
-- `llm`：LLM 开关、请求参数、语音会话限制和两种模式短语；
-- `api`：HTTP/WebSocket 集成接口。
-
-尚未确定的语音入口可以添加到 `keywords.custom`。例如
-`music.open: [打开音乐]` 会输出 `command.music.open`，不需要修改 ASR。
-
-当前是 ASR 后关键词检测，因此每段有效人声都会执行一次 ASR。关键词负责开启或
-退出功能；聊天模式中的普通转写会被路由给聊天处理程序。
-
-识别到“拍照”“照相”“打印照片”“photo”“take a photo”等短语，或稳定检测到
-`Victory` 手势后，会启动同一个照片打印流程：等待 1 秒，取届时最新相机帧，
-灰度化并像素化，然后调用 `{printer.base_url}/printer/image`。`Open_Palm`
-用于切换中英文。打印任务和随后的 2 秒冷却期间会忽略重复触发，不建立队列。
-
-阶段一 LLM 功能默认关闭。先复制私密配置模板：
-
-```bash
-cp config/llm.example.yaml config/llm.yaml
+```text
+GET  /api/health
+GET  /api/state
+GET  /api/events?after_sequence=0
+WS   /api/events
+POST /api/results
+GET  /api/photos/{capture_id}.jpg
 ```
 
-在被 Git 忽略的 `config/llm.yaml` 中填写新签发的 `base_url`、`model` 和
-`api_key`，再将 `config/app.yaml` 中的 `llm.enabled` 设置为 `true`：
+WebSocket 和事件历史返回统一的 `PerceptionEvent`，包含 `event_id`、
+`sequence`、`event_type`、`source`、`session_id` 和 `payload`。
+
+外部功能程序完成任务后，可以提交结果：
 
 ```bash
-python -m app
+curl -X POST http://127.0.0.1:8090/api/results \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "event_type": "external.completed",
+    "session_id": "bot",
+    "payload": {"status": "ok"}
+  }'
 ```
 
-如果 LLM 已启用但私密文件不存在，应用仍会正常运行拍照、打印、手势、ASR 和视觉
-功能；写信或问答开始短语会产生 `llm.session_rejected`，原因为
-`not_configured`。显式关闭 LLM 时拒绝原因为 `disabled`，两种情况都不会缓存
-语音或调用 LLM。
+## 日志与排错
 
-写信和问答模式分别使用 YAML 中的开始、结束和取消短语。会话期间普通 ASR 转录
-只暂存在内存；只有完整匹配当前模式的结束/取消句才执行控制操作。以“正文：”开头
-可以强制把冲突短语保存为正文。写信结果产生 `llm.letter_completed`，问答结果产生
-`llm.answer_completed`，完整调试信息写入 `logs/llm.log`。阶段一不会打印 LLM
-结果，打印排版属于阶段二。
+```text
+logs/perception.log  ASR 转写、关键词、感知事件和控制器事件
+logs/llm.log         LLM 会话、缓存文本、生成结果和错误
+```
+
+常见问题：
+
+- `llm.session_rejected / disabled`：将 `llm.enabled` 设置为 `true`。
+- `llm.session_rejected / not_configured`：创建并填写
+  `config/llm.yaml`。
+- 麦克风列表为空：检查系统输入设备和终端麦克风权限。
+- 命令经常识别失败：检查 `transcript`，并调整 VAD 或更换输入设备。
+- 视觉模型启动失败：检查 `vision.gesture_model` 指向的文件。
+- 端口占用：修改 `hardware` 或 `api` 下的端口。
 
 ## 测试
 
@@ -191,40 +268,27 @@ python -m app
 .venv/bin/python -m pytest -q
 ```
 
-测试覆盖：
+测试覆盖配置校验、VAD、麦克风输入、ASR/关键词路由、LLM 会话、运行时、照片和
+打印机客户端。测试使用模拟音频和模型，不会调用真实 LLM。
 
-- 配置边界；
-- VAD 断句、静音过滤和最长语句；
-- 关键词优先级与闲聊过滤；
-- 事件缓存容量和 TTL；
-- 音频事件主链路；
-- 视觉手势稳定触发和重新武装；
-- 打印图像转换、位图协议、触发去重和失败恢复；
-- LLM 模式检测、会话限制、取消冲突、API 协议和错误恢复。
-
-## 目录
+## 项目结构
 
 ```text
 app/
-├── main.py
-├── hardware_main.py
-├── config.py
-├── factories.py
-├── models.py
-├── perception_events.py
-├── event_cache.py
-├── asr/
-├── audio/
-│   └── vad/
-├── detection/
-├── control/
-├── events/
-├── features/
-├── api/
-├── vision/
-├── transport/
-└── runtime/
-```
+├── api/          HTTP 与 WebSocket API
+├── asr/          Faster Whisper 和测试后端
+├── audio/        VAD 与流式音频断句
+├── control/      应用状态和事件路由
+├── detection/    关键词检测
+├── features/     照片和热敏打印
+├── llm/          模式检测、会话和 API 客户端
+├── runtime/      持续感知运行时
+├── transport/    Bot 网络输入与电脑麦克风
+└── vision/       图像解码、手势识别和稳定器
 
-后续功能应消费 `command.*` 事件，不要让 LLM 或业务逻辑反向依赖硬件协议、
-VAD、ASR 或视觉模型。
+config/           公开配置和私密配置模板
+scripts/          硬件协议诊断与 Vision 测试
+tests/            自动化测试
+models/           本地模型（不提交）
+logs/             运行日志（不提交）
+```

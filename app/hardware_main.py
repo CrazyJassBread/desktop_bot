@@ -32,6 +32,12 @@ from app.transport.hardware_sources import (
     HTTPJPEGImageSource,
     TCPPCMAudioSource,
 )
+from app.transport.microphone_source import (
+    LocalMicrophoneAudioSource,
+    MicrophoneError,
+    list_input_devices,
+    parse_input_device,
+)
 from app.vision.base import GestureBackend, VisionError
 from app.vision.continuous_processor import ContinuousVisionProcessor
 
@@ -45,9 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=("run", "test"),
+        choices=("run", "test", "mic-test"),
         default="run",
-        help="run the service, or open the live Vision test window",
+        help="run the service, test Vision, or test LLM with a microphone",
     )
     parser.add_argument(
         "--config",
@@ -73,15 +79,65 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.25,
         help="display scale used by test mode",
     )
+    parser.add_argument(
+        "--input-device",
+        type=parse_input_device,
+        default=None,
+        help="microphone device index or name used by mic-test",
+    )
+    parser.add_argument(
+        "--list-input-devices",
+        action="store_true",
+        help="list microphones and exit (mic-test only)",
+    )
     return parser
+
+
+def validate_mode_arguments(args: argparse.Namespace) -> None:
+    if args.mode != "mic-test" and (
+        args.input_device is not None or args.list_input_devices
+    ):
+        raise ConfigurationError("microphone options require mic-test mode")
+    if args.mode == "mic-test" and (
+        args.audio_only
+        or args.vision_only
+        or args.audio_host is not None
+        or args.audio_port is not None
+        or args.vision_host is not None
+        or args.vision_port is not None
+    ):
+        raise ConfigurationError(
+            "hardware channel options are not valid in mic-test mode"
+        )
+
+
+def format_input_devices() -> str:
+    devices = list_input_devices()
+    if not devices:
+        return "No input-capable audio devices found."
+    return "\n".join(
+        f"{item.index}: {item.name} "
+        f"(inputs={item.max_input_channels}, "
+        f"default_rate={item.default_samplerate:g})"
+        for item in devices
+    )
 
 
 def build_daemon(
     config: AppConfig,
     args: argparse.Namespace,
 ) -> tuple[PerceptionDaemon, GestureBackend | None]:
-    audio_enabled = config.hardware.audio_enabled and not args.vision_only
-    vision_enabled = config.hardware.vision_enabled and not args.audio_only
+    microphone_mode = args.mode == "mic-test"
+    audio_enabled = (
+        True
+        if microphone_mode
+        else config.hardware.audio_enabled and not args.vision_only
+    )
+    vision_enabled = (
+        False
+        if microphone_mode
+        else config.hardware.vision_enabled and not args.audio_only
+    )
     if not audio_enabled and not vision_enabled:
         raise ConfigurationError("both hardware input channels are disabled")
 
@@ -105,17 +161,25 @@ def build_daemon(
     if audio_enabled:
         if not config.vad.enabled:
             raise ConfigurationError("hardware audio requires vad.enabled=true")
-        audio_source = TCPPCMAudioSource(
-            args.audio_host or config.hardware.audio_host,
-            (
-                args.audio_port
-                if args.audio_port is not None
-                else config.hardware.audio_port
-            ),
-            sample_rate=config.audio.target_sample_rate,
-            frame_samples=config.hardware.audio_frame_samples,
-            queue_size=config.hardware.audio_queue_size,
-        )
+        if microphone_mode:
+            audio_source = LocalMicrophoneAudioSource(
+                device=args.input_device,
+                sample_rate=config.audio.target_sample_rate,
+                frame_samples=config.hardware.audio_frame_samples,
+                queue_size=config.hardware.audio_queue_size,
+            )
+        else:
+            audio_source = TCPPCMAudioSource(
+                args.audio_host or config.hardware.audio_host,
+                (
+                    args.audio_port
+                    if args.audio_port is not None
+                    else config.hardware.audio_port
+                ),
+                sample_rate=config.audio.target_sample_rate,
+                frame_samples=config.hardware.audio_frame_samples,
+                queue_size=config.hardware.audio_queue_size,
+            )
         segmenter = StreamingAudioPipeline(
             config.vad,
             build_vad(config),
@@ -242,6 +306,17 @@ async def run(args: argparse.Namespace) -> None:
             daemon.audio_source is not None,
             daemon.image_source is not None,
         )
+        if args.mode == "mic-test":
+            LOGGER.info(
+                "mic-test active device=%s; ASR/events=logs/perception.log; "
+                "LLM sessions/results=%s; press Ctrl+C to stop",
+                (
+                    args.input_device
+                    if args.input_device is not None
+                    else "default"
+                ),
+                config.llm.log_path,
+            )
         await daemon.run()
     finally:
         if api_server is not None:
@@ -257,6 +332,10 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        validate_mode_arguments(args)
+        if args.list_input_devices:
+            print(format_input_devices())
+            return
         if args.mode == "test":
             from scripts.vision_live import run_live_view
 
@@ -275,6 +354,7 @@ def main() -> None:
         LOGGER.info("stopped by user")
     except (
         ConfigurationError,
+        MicrophoneError,
         OSError,
         RuntimeError,
         VADError,

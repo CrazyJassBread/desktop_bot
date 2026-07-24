@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.config import ConfigurationError, load_config
-from app.hardware_main import build_parser
+from app.hardware_main import build_parser, validate_mode_arguments
 
 
 def test_config_defaults():
@@ -184,6 +184,24 @@ def test_app_cli_supports_vision_test_mode():
     assert args.mode == "test"
     assert args.vision_port == 9000
     assert args.scale == 1.5
+
+
+def test_app_cli_supports_microphone_test_options():
+    args = build_parser().parse_args(
+        ["mic-test", "--input-device", "2"]
+    )
+
+    validate_mode_arguments(args)
+
+    assert args.mode == "mic-test"
+    assert args.input_device == 2
+
+
+def test_microphone_options_are_rejected_outside_mic_test():
+    args = build_parser().parse_args(["run", "--input-device", "2"])
+
+    with pytest.raises(ConfigurationError):
+        validate_mode_arguments(args)
 
 
 def test_app_cli_uses_config_directory_defaults():

@@ -31,6 +31,11 @@ from app.perception_events import PerceptionEvent
 from app.runtime.perception_daemon import PerceptionDaemon
 from app.models import AudioData, GestureDetection, ImageRequest
 from app.transport.sources import AudioFrameSource
+from app.transport.hardware_sources import (
+    HTTPJPEGImageSource,
+    TCPPCMAudioSource,
+)
+from app.transport.microphone_source import LocalMicrophoneAudioSource
 from app.vision.continuous_processor import ContinuousVisionProcessor
 from app.vision.mock_backend import MockGestureBackend
 
@@ -449,6 +454,58 @@ async def test_build_daemon_detects_but_rejects_unconfigured_llm(
     assert controller is not None
     assert controller.llm_session_manager is None
     assert controller.llm_unavailable_reason == "not_configured"
+
+
+def test_build_daemon_selects_microphone_without_vision(monkeypatch):
+    config = load_config()
+    config.hardware.audio_enabled = False
+    monkeypatch.setattr(
+        "app.hardware_main.build_vad",
+        lambda _config: MockVADBackend([]),
+    )
+    monkeypatch.setattr(
+        "app.hardware_main.build_asr",
+        lambda _config: SequenceASR([]),
+    )
+
+    daemon, gesture_backend = build_daemon(
+        config,
+        build_parser().parse_args(
+            ["mic-test", "--input-device", "2"]
+        ),
+    )
+
+    assert isinstance(daemon.audio_source, LocalMicrophoneAudioSource)
+    assert daemon.audio_source.device == 2
+    assert daemon.image_source is None
+    assert gesture_backend is None
+    assert daemon.audio_processor is not None
+    assert daemon.audio_processor.llm_detector is not None
+
+
+def test_build_daemon_run_mode_keeps_hardware_sources(monkeypatch):
+    config = load_config()
+    monkeypatch.setattr(
+        "app.hardware_main.build_vad",
+        lambda _config: MockVADBackend([]),
+    )
+    monkeypatch.setattr(
+        "app.hardware_main.build_asr",
+        lambda _config: SequenceASR([]),
+    )
+    monkeypatch.setattr(
+        "app.hardware_main.build_gesture",
+        lambda _config: MockGestureBackend([]),
+    )
+
+    daemon, gesture_backend = build_daemon(
+        config,
+        build_parser().parse_args(["run"]),
+    )
+
+    assert isinstance(daemon.audio_source, TCPPCMAudioSource)
+    assert isinstance(daemon.image_source, HTTPJPEGImageSource)
+    assert gesture_backend is not None
 
 
 @pytest.mark.asyncio
