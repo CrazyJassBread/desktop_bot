@@ -69,38 +69,19 @@ class ApplicationController:
                     },
                 ),
             )
-        if event.event_type == "gesture.victory":
-            return self._switch_language(event)
         if event.event_type == "gesture.open_palm":
-            if self.photo_manager is None:
-                return (
-                    self._result(
-                        "photo.capture_failed",
-                        event,
-                        {"reason": "photo_feature_disabled"},
-                    ),
-                )
-            schedule = getattr(self.photo_manager, "schedule")
-            started = schedule(event)
-            if not started:
-                return ()
-            self.state.photo_state = "countdown"
-            return (
-                self._command(
-                    "camera.capture_after",
-                    event,
-                    {
-                        "delay_ms": int(
-                            getattr(self.photo_manager, "delay_seconds") * 1000
-                        )
-                    },
-                ),
-            )
+            return self._switch_language(event)
+        if event.event_type in {"gesture.victory", "feature.photo_print"}:
+            return self._start_photo_print(event)
         if event.event_type == "photo.captured":
             self.state.photo_state = "processing"
             self.state.active_feature = "photo"
             return ()
-        if event.event_type in {"photo.completed", "photo.capture_failed"}:
+        if event.event_type in {
+            "photo.completed",
+            "photo.capture_failed",
+            "photo.print_failed",
+        }:
             self.state.photo_state = "idle"
             if self.state.active_feature == "photo":
                 self.state.active_feature = (
@@ -108,6 +89,34 @@ class ApplicationController:
                 )
             return ()
         return ()
+
+    def _start_photo_print(
+        self,
+        event: PerceptionEvent,
+    ) -> tuple[PerceptionEvent, ...]:
+        if self.photo_manager is None:
+            return (
+                self._result(
+                    "photo.capture_failed",
+                    event,
+                    {"reason": "photo_feature_disabled"},
+                ),
+            )
+        schedule = getattr(self.photo_manager, "schedule")
+        if not schedule(event):
+            return ()
+        self.state.photo_state = "countdown"
+        return (
+            self._command(
+                "camera.capture_after",
+                event,
+                {
+                    "delay_ms": int(
+                        getattr(self.photo_manager, "delay_seconds") * 1_000
+                    )
+                },
+            ),
+        )
 
     def _start_chat(
         self,

@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from app.models import ImageRequest
 from app.perception_events import PerceptionEvent
+from app.features.thermal_printer import PrinterError
 
 LOGGER = logging.getLogger("desktop_assistant.photo")
 EventEmitter = Callable[[PerceptionEvent], Awaitable[None]]
@@ -46,6 +47,8 @@ class PhotoCaptureManager:
         output_dir: Path | str = "captured_photos",
         processor_url: str = "",
         timeout_seconds: float = 10.0,
+        printer: object | None = None,
+        cooldown_seconds: float = 2.0,
     ) -> None:
         self.frame_store = frame_store
         self.delay_seconds = delay_seconds
@@ -53,20 +56,28 @@ class PhotoCaptureManager:
         self.output_dir = Path(output_dir)
         self.processor_url = processor_url
         self.timeout_seconds = timeout_seconds
+        self.printer = printer
+        self.cooldown_seconds = cooldown_seconds
         self._emit: EventEmitter | None = None
         self._task: asyncio.Task[None] | None = None
+        self.phase = "idle"
 
     def set_event_emitter(self, emitter: EventEmitter) -> None:
         self._emit = emitter
 
     def schedule(self, trigger: PerceptionEvent) -> bool:
         if self._task is not None and not self._task.done():
+            LOGGER.debug(
+                "photo print trigger ignored while phase=%s",
+                self.phase,
+            )
             return False
         self._task = asyncio.create_task(self._capture(trigger))
         return True
 
     async def _capture(self, trigger: PerceptionEvent) -> None:
         try:
+            self.phase = "countdown"
             await asyncio.sleep(self.delay_seconds)
             frame = self.frame_store.snapshot()
             if frame is None:
@@ -77,6 +88,7 @@ class PhotoCaptureManager:
                 await self._failed(trigger, "camera_frame_stale")
                 return
 
+            self.phase = "processing"
             capture_id = uuid4().hex
             path = await asyncio.to_thread(
                 self._save,
@@ -96,6 +108,41 @@ class PhotoCaptureManager:
                         "photo_path": str(path),
                         "photo_url": f"/api/photos/{capture_id}.jpg",
                         "content_type": frame.request.content_type,
+                    },
+                )
+            )
+
+            if self.printer is None:
+                await self._print_failed(
+                    trigger,
+                    capture_id,
+                    "printer_disabled",
+                )
+                return
+            self.phase = "printing"
+            try:
+                print_result = await asyncio.to_thread(
+                    getattr(self.printer, "print_image"),
+                    frame.request.image_bytes,
+                )
+            except PrinterError as exc:
+                await self._print_failed(
+                    trigger,
+                    capture_id,
+                    exc.reason,
+                )
+                return
+            await self._publish(
+                PerceptionEvent(
+                    event_type="photo.printed",
+                    source="printer",
+                    session_id=trigger.session_id,
+                    payload={
+                        "capture_id": capture_id,
+                        "trigger_event_id": trigger.event_id,
+                        "width": getattr(print_result, "width"),
+                        "height": getattr(print_result, "height"),
+                        "chunk_count": getattr(print_result, "chunk_count"),
                     },
                 )
             )
@@ -123,10 +170,20 @@ class PhotoCaptureManager:
                 )
             )
         except asyncio.CancelledError:
+            self.phase = "idle"
             raise
         except Exception as exc:
             LOGGER.exception("photo capture or downstream upload failed")
             await self._failed(trigger, type(exc).__name__)
+        finally:
+            if self.phase != "idle":
+                self.phase = "cooldown"
+                try:
+                    await asyncio.sleep(self.cooldown_seconds)
+                except asyncio.CancelledError:
+                    self.phase = "idle"
+                    raise
+                self.phase = "idle"
 
     def _save(self, capture_id: str, image_bytes: bytes) -> Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +249,25 @@ class PhotoCaptureManager:
                 source="photo",
                 session_id=trigger.session_id,
                 payload={
+                    "trigger_event_id": trigger.event_id,
+                    "reason": reason,
+                },
+            )
+        )
+
+    async def _print_failed(
+        self,
+        trigger: PerceptionEvent,
+        capture_id: str,
+        reason: str,
+    ) -> None:
+        await self._publish(
+            PerceptionEvent(
+                event_type="photo.print_failed",
+                source="printer",
+                session_id=trigger.session_id,
+                payload={
+                    "capture_id": capture_id,
                     "trigger_event_id": trigger.event_id,
                     "reason": reason,
                 },

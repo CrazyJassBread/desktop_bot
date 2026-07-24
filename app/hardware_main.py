@@ -17,6 +17,7 @@ from app.event_cache import EventCache
 from app.events.event_bus import EventBus
 from app.factories import build_asr, build_gesture, build_vad, setup_logging
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
+from app.features.thermal_printer import ThermalPrinterClient
 from app.runtime.perception_daemon import PerceptionDaemon
 from app.transport.hardware_sources import (
     HTTPJPEGImageSource,
@@ -130,6 +131,20 @@ def build_daemon(
             gesture_backend,
         )
         if config.application.photo_enabled:
+            printer = None
+            if config.printer.enabled:
+                printer = ThermalPrinterClient(
+                    config.printer.base_url,
+                    width=config.printer.width,
+                    max_chunk_height=config.printer.max_chunk_height,
+                    pixel_size=config.printer.pixel_size,
+                    contrast=config.printer.contrast,
+                    brightness=config.printer.brightness,
+                    grayscale_levels=config.printer.grayscale_levels,
+                    dither=config.printer.dither,
+                    rotate_180=config.printer.rotate_180,
+                    timeout_seconds=config.printer.timeout_seconds,
+                )
             photo_manager = PhotoCaptureManager(
                 latest_frame_store,
                 delay_seconds=config.application.photo_delay_seconds,
@@ -141,6 +156,8 @@ def build_daemon(
                 timeout_seconds=(
                     config.application.downstream_timeout_seconds
                 ),
+                printer=printer,
+                cooldown_seconds=config.printer.cooldown_seconds,
             )
 
     controller = ApplicationController(

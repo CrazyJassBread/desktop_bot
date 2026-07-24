@@ -17,6 +17,7 @@ from app.control.application_controller import ApplicationController
 from app.detection.keywords import KeywordDetector
 from app.event_cache import EventCache
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
+from app.features.thermal_printer import PrintResult, PrinterError
 from app.perception_events import PerceptionEvent
 from app.runtime.perception_daemon import PerceptionDaemon
 from app.models import AudioData, GestureDetection, ImageRequest
@@ -43,6 +44,18 @@ class FiniteAudioSource(AudioFrameSource):
         frame = np.ones(512, dtype=np.float32) * 0.1
         for _ in range(self.count):
             yield frame
+
+
+class RecordingPrinter:
+    def __init__(self, failure: str | None = None) -> None:
+        self.failure = failure
+        self.calls: list[bytes] = []
+
+    def print_image(self, image_bytes: bytes) -> PrintResult:
+        self.calls.append(image_bytes)
+        if self.failure is not None:
+            raise PrinterError(self.failure)
+        return PrintResult(width=384, height=288, chunk_count=1)
 
 
 def jpeg_bytes() -> bytes:
@@ -207,23 +220,35 @@ async def test_controller_routes_chat_and_language_commands():
     assert commands[0].payload["parameters"]["question"] == "举个例子"
 
     language = await controller.handle(
-        PerceptionEvent("gesture.victory", "vision")
+        PerceptionEvent("gesture.open_palm", "vision")
     )
     assert controller.state.language == "en"
     assert [item.event_type for item in language] == [
         "command.language.set",
         "language.changed",
     ]
+    victory = await controller.handle(
+        PerceptionEvent("gesture.victory", "vision")
+    )
+    assert controller.state.language == "en"
+    assert [item.event_type for item in victory] == [
+        "photo.capture_failed"
+    ]
 
 
 @pytest.mark.asyncio
-async def test_open_palm_captures_latest_frame_after_delay(tmp_path):
+async def test_voice_photo_print_ignores_duplicates_until_cooldown_ends(
+    tmp_path,
+):
     store = LatestFrameStore()
+    printer = RecordingPrinter()
     manager = PhotoCaptureManager(
         store,
         delay_seconds=0.01,
         max_frame_age_seconds=1,
         output_dir=tmp_path,
+        printer=printer,
+        cooldown_seconds=0.03,
     )
     controller = ApplicationController(photo_manager=manager)
     emitted: list[PerceptionEvent] = []
@@ -241,19 +266,74 @@ async def test_open_palm_captures_latest_frame_after_delay(tmp_path):
         )
     )
     commands = await controller.handle(
-        PerceptionEvent("gesture.open_palm", "vision")
+        PerceptionEvent("feature.photo_print", "audio")
     )
     assert [item.event_type for item in commands] == [
         "command.camera.capture_after"
     ]
     assert controller.state.photo_state == "countdown"
+    duplicate = await controller.handle(
+        PerceptionEvent("gesture.victory", "vision")
+    )
+    assert duplicate == ()
 
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)
 
     assert [item.event_type for item in emitted] == [
         "photo.captured",
+        "photo.printed",
         "photo.completed",
     ]
-    assert controller.state.photo_state == "idle"
+    assert len(printer.calls) == 1
     assert len(list(tmp_path.glob("*.jpg"))) == 1
+
+    cooling_duplicate = await controller.handle(
+        PerceptionEvent("feature.photo_print", "audio")
+    )
+    assert cooling_duplicate == ()
+
+    await asyncio.sleep(0.04)
+
+    rearmed = await controller.handle(
+        PerceptionEvent("gesture.victory", "vision")
+    )
+    assert [item.event_type for item in rearmed] == [
+        "command.camera.capture_after"
+    ]
+    await controller.aclose()
+
+
+@pytest.mark.asyncio
+async def test_printer_failure_emits_reason_and_recovers(tmp_path):
+    store = LatestFrameStore()
+    printer = RecordingPrinter(failure="timeout")
+    manager = PhotoCaptureManager(
+        store,
+        delay_seconds=0.001,
+        max_frame_age_seconds=1,
+        output_dir=tmp_path,
+        printer=printer,
+        cooldown_seconds=0.001,
+    )
+    controller = ApplicationController(photo_manager=manager)
+    emitted: list[PerceptionEvent] = []
+
+    async def emit(event: PerceptionEvent) -> None:
+        emitted.append(event)
+        await controller.handle(event)
+
+    controller.set_event_emitter(emit)
+    store.update(ImageRequest(jpeg_bytes(), session_id="bot"))
+    await controller.handle(PerceptionEvent("gesture.victory", "vision"))
+
+    await asyncio.sleep(0.02)
+
+    assert [event.event_type for event in emitted] == [
+        "photo.captured",
+        "photo.print_failed",
+    ]
+    assert emitted[-1].payload["reason"] == "timeout"
+    assert manager.schedule(
+        PerceptionEvent("feature.photo_print", "audio")
+    ) is True
     await controller.aclose()
