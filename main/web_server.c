@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "printer_http.h"
+#include "oled_http.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -11,13 +12,20 @@ static esp_err_t root_handler(
 )
 {
     const char response[] =
-        "{"
-        "\"device\":\"LanguageBot\","
-        "\"endpoints\":["
-            "\"GET /printer-test\","
-            "\"POST /print-image?width=...&height=...\""
-        "]"
-        "}";
+    "{"
+    "\"device\":\"LanguageBot\","
+    "\"endpoints\":["
+        "\"GET /\","
+        "\"POST /printer/image?width=...&height=...\","
+        "\"POST /printer/text\","
+        "\"POST /printer/feed?lines=...\","
+        "\"GET /printer/test\","
+        "\"POST /oled/eyes\","
+        "\"GET /oled/test\","
+        "\"GET /server/config\","
+        "\"POST /server/config\""
+    "]"
+    "}";
 
     httpd_resp_set_type(
         request,
@@ -113,16 +121,19 @@ httpd_handle_t web_server_start(void)
         return NULL;
     }
 
-    /*
-     * Later:
-     *
-     * result = screen_http_register_handlers(server);
-     *
-     * if (result != ESP_OK) {
-     *     httpd_stop(server);
-     *     return NULL;
-     * }
-     */
+    result = oled_http_register_handlers(server);
+
+    if (result != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Could not register OLED handlers: %s",
+            esp_err_to_name(result)
+        );
+
+        httpd_stop(server);
+        return NULL;
+    }
+
 
     ESP_LOGI(
         TAG,

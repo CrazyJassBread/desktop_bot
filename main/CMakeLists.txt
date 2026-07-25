@@ -9,7 +9,10 @@ idf_component_register(
         "printer_http.c"
         "web_server.c"
         "roboeyes_display.cpp"
+        "oled_http.c"
+
     INCLUDE_DIRS "."
+
     PRIV_REQUIRES
         esp_wifi
         esp_event

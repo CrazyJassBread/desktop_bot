@@ -38,7 +38,7 @@
  *
  * Do not use localhost or 127.0.0.1.
  */
-#define CAMERA_SERVER_URL "http://10.76.8.21:8081/upload"
+#define CAMERA_SERVER_URL "http://10.76.11.213:8081/upload"
 
 /*
  * Send one picture every 500 ms.

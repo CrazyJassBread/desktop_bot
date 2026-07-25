@@ -88,6 +88,27 @@ void roboeyes_blink(void);
 void roboeyes_laugh(void);
 void roboeyes_confused(void);
 
+void roboeyes_init(void);
+
+void roboeyes_set_happy(void);
+void roboeyes_set_angry(void);
+void roboeyes_set_tired(void);
+void roboeyes_set_default(void);
+
+void roboeyes_set_position(uint8_t position);
+
+void roboeyes_blink(void);
+void roboeyes_laugh(void);
+void roboeyes_confused(void);
+
+esp_err_t roboeyes_show_expression(
+    const char *expression
+);
+
+esp_err_t roboeyes_set_look_direction(
+    const char *direction
+);
+
 #ifdef __cplusplus
 }
 #endif

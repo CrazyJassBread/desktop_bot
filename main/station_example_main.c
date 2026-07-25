@@ -198,16 +198,6 @@ void app_main(void)
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
     wifi_init_sta();
 
-    // camera sensor
-    ESP_ERROR_CHECK(camera_init());
-
-    ESP_ERROR_CHECK(camera_uploader_start());
-
-    ESP_LOGI(TAG, "Camera uploader running");
-
-    // microphone stream
-    ESP_ERROR_CHECK(mic_stream_start());
-
     // printer
     printer_init();
         
@@ -221,15 +211,6 @@ void app_main(void)
         sizeof(initialize)
     );
 
-    httpd_handle_t server =
-        web_server_start();
-
-    if (server == NULL) {
-        ESP_LOGE(
-            "MAIN",
-            "Failed to start web server"
-        );
-    }
 
     // OLED display
     ESP_ERROR_CHECK(oled_init());
@@ -243,5 +224,26 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(3000));
 
     roboeyes_laugh();
+
+    // webserver
+    httpd_handle_t server =
+        web_server_start();
+
+    if (server == NULL) {
+        ESP_LOGE(
+            "MAIN",
+            "Failed to start web server"
+        );
+    }
+
+    // camera sensor
+    ESP_ERROR_CHECK(camera_init());
+
+    ESP_ERROR_CHECK(camera_uploader_start());
+
+    ESP_LOGI(TAG, "Camera uploader running");
+
+    // microphone stream
+    ESP_ERROR_CHECK(mic_stream_start());
 
 }

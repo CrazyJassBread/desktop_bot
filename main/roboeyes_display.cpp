@@ -520,8 +520,8 @@ void roboeyes_init()
 
     eyes.setWidth(36, 36);
     eyes.setHeight(36, 36);
-    eyes.setBorderradius(10, 10);
-    eyes.setSpacebetween(10);
+    eyes.setBorderradius(12, 12);
+    eyes.setSpacebetween(16);
 
     eyes.setAutoblinker(
         ON,
@@ -599,4 +599,139 @@ void roboeyes_laugh()
 void roboeyes_confused()
 {
     eyes.anim_confused();
+}
+
+esp_err_t roboeyes_show_expression(
+    const char *expression
+)
+{
+    if (expression == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (std::strcmp(expression, "default") == 0) {
+        eyes.setMood(DEFAULT);
+        eyes.setPosition(DEFAULT);
+        eyes.open();
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "happy") == 0) {
+        eyes.setMood(HAPPY);
+        eyes.open();
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "sad") == 0) {
+        /*
+         * RoboEyes does not have a native SAD mood.
+         * Tired is the closest built-in expression.
+         */
+        eyes.setMood(TIRED);
+        eyes.setPosition(S);
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "angry") == 0) {
+        eyes.setMood(ANGRY);
+        eyes.open();
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "tired") == 0) {
+        eyes.setMood(TIRED);
+        eyes.open();
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "laugh") == 0) {
+        eyes.setMood(HAPPY);
+        eyes.anim_laugh();
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "confused") == 0) {
+        eyes.setMood(DEFAULT);
+        eyes.anim_confused();
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "thinking") == 0) {
+        eyes.setMood(DEFAULT);
+        eyes.setPosition(NE);
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "listening") == 0) {
+        eyes.setMood(DEFAULT);
+        eyes.setPosition(DEFAULT);
+        eyes.open();
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "speaking") == 0) {
+        eyes.setMood(HAPPY);
+        eyes.setPosition(DEFAULT);
+        eyes.open();
+
+        return ESP_OK;
+    }
+
+    if (std::strcmp(expression, "blink") == 0) {
+        eyes.blink();
+
+        return ESP_OK;
+    }
+
+    return ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t roboeyes_set_look_direction(
+    const char *direction
+)
+{
+    if (direction == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (std::strcmp(direction, "center") == 0) {
+        eyes.setPosition(DEFAULT);
+    } else if (std::strcmp(direction, "left") == 0) {
+        eyes.setPosition(W);
+    } else if (std::strcmp(direction, "right") == 0) {
+        eyes.setPosition(E);
+    } else if (std::strcmp(direction, "up") == 0) {
+        eyes.setPosition(N);
+    } else if (std::strcmp(direction, "down") == 0) {
+        eyes.setPosition(S);
+    } else if (
+        std::strcmp(direction, "up-left") == 0
+    ) {
+        eyes.setPosition(NW);
+    } else if (
+        std::strcmp(direction, "up-right") == 0
+    ) {
+        eyes.setPosition(NE);
+    } else if (
+        std::strcmp(direction, "down-left") == 0
+    ) {
+        eyes.setPosition(SW);
+    } else if (
+        std::strcmp(direction, "down-right") == 0
+    ) {
+        eyes.setPosition(SE);
+    } else {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    return ESP_OK;
 }

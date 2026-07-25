@@ -40,7 +40,7 @@
 #define MIC_BUFFER_SAMPLES  512
 
 #define MIC_SERVER_PORT     8080
-#define MIC_SERVER_IP       "10.76.8.21"
+#define MIC_SERVER_IP       "10.76.11.213"
 
 static const char *TAG = "MIC_STREAM";
 static i2s_chan_handle_t mic_rx_channel = NULL;
