@@ -42,32 +42,58 @@ class PhotoCaptureManager:
         frame_store: LatestFrameStore,
         *,
         delay_seconds: float = 2.0,
+        voice_delay_seconds: float = 1.0,
         max_frame_age_seconds: float = 1.0,
         output_dir: Path | str = "captured_photos",
         processor_url: str = "",
         timeout_seconds: float = 10.0,
+        printer: object | None = None,
     ) -> None:
         self.frame_store = frame_store
         self.delay_seconds = delay_seconds
+        self.voice_delay_seconds = voice_delay_seconds
         self.max_frame_age_seconds = max_frame_age_seconds
         self.output_dir = Path(output_dir)
         self.processor_url = processor_url
         self.timeout_seconds = timeout_seconds
+        self.printer = printer
         self._emit: EventEmitter | None = None
         self._task: asyncio.Task[None] | None = None
 
     def set_event_emitter(self, emitter: EventEmitter) -> None:
         self._emit = emitter
 
-    def schedule(self, trigger: PerceptionEvent) -> bool:
+    def schedule(
+        self,
+        trigger: PerceptionEvent,
+        *,
+        delay_seconds: float | None = None,
+        print_photo: bool = False,
+    ) -> bool:
         if self._task is not None and not self._task.done():
             return False
-        self._task = asyncio.create_task(self._capture(trigger))
+        self._task = asyncio.create_task(
+            self._capture(
+                trigger,
+                delay_seconds=(
+                    self.delay_seconds
+                    if delay_seconds is None
+                    else delay_seconds
+                ),
+                print_photo=print_photo,
+            )
+        )
         return True
 
-    async def _capture(self, trigger: PerceptionEvent) -> None:
+    async def _capture(
+        self,
+        trigger: PerceptionEvent,
+        *,
+        delay_seconds: float,
+        print_photo: bool,
+    ) -> None:
         try:
-            await asyncio.sleep(self.delay_seconds)
+            await asyncio.sleep(delay_seconds)
             frame = self.frame_store.snapshot()
             if frame is None:
                 await self._failed(trigger, "camera_frame_unavailable")
@@ -99,6 +125,9 @@ class PhotoCaptureManager:
                     },
                 )
             )
+
+            if print_photo and self.printer is not None:
+                await self._print(capture_id, trigger, path)
 
             downstream: dict[str, object] = {}
             if self.processor_url:
@@ -135,6 +164,47 @@ class PhotoCaptureManager:
         temporary_path.write_bytes(image_bytes)
         temporary_path.replace(final_path)
         return final_path.resolve()
+
+    async def _print(
+        self,
+        capture_id: str,
+        trigger: PerceptionEvent,
+        path: Path,
+    ) -> None:
+        """Send the photo to the thermal printer; failures never block
+        the photo.completed event."""
+        try:
+            print_photo = getattr(self.printer, "print_photo")
+            summary = await asyncio.to_thread(print_photo, path)
+        except Exception as exc:
+            LOGGER.exception("photo printing failed")
+            await self._publish(
+                PerceptionEvent(
+                    event_type="photo.print_failed",
+                    source="photo",
+                    session_id=trigger.session_id,
+                    payload={
+                        "capture_id": capture_id,
+                        "trigger_event_id": trigger.event_id,
+                        "photo_path": str(path),
+                        "reason": type(exc).__name__,
+                    },
+                )
+            )
+            return
+        await self._publish(
+            PerceptionEvent(
+                event_type="photo.printed",
+                source="photo",
+                session_id=trigger.session_id,
+                payload={
+                    "capture_id": capture_id,
+                    "trigger_event_id": trigger.event_id,
+                    "photo_path": str(path),
+                    "printer": summary,
+                },
+            )
+        )
 
     def _upload(
         self,

@@ -58,6 +58,10 @@ class FasterWhisperBackend(ASRBackend):
                     )
         return self._model
 
+    def set_language(self, language: str) -> None:
+        # Read once per transcribe call, so switching mid-stream is safe.
+        self.language = language
+
     def _transcribe_sync(self, audio: AudioData) -> str:
         try:
             segments, _ = self._get_model().transcribe(

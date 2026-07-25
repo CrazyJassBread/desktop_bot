@@ -1,0 +1,18 @@
+# ESP32 thermal printer used by the voice-triggered photo feature.
+# When disabled, voice-triggered photos are still captured and saved but
+# nothing is sent to the printer.
+
+printer:
+  enabled: false
+  # Base URL of the ESP32 printer HTTP server, e.g. http://10.76.10.141
+  base_url: "http://10.76.10.141"
+  timeout_seconds: 30.0
+  # Pixel-art processing applied before printing.
+  pixel_size: 4
+  grayscale_levels: 4
+  contrast: 1.2
+  brightness: 1.0
+  dither: true
+  rotate_180: false
+  # Images taller than this are split into chunks before upload.
+  max_chunk_height: 1200

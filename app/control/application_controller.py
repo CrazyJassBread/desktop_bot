@@ -8,6 +8,7 @@ from typing import Awaitable, Callable
 from app.perception_events import PerceptionEvent
 
 EventEmitter = Callable[[PerceptionEvent], Awaitable[None]]
+LanguageListener = Callable[[str], None]
 
 
 @dataclass
@@ -30,10 +31,12 @@ class ApplicationController:
         default_language: str = "zh",
         photo_manager: object | None = None,
         llm_manager: object | None = None,
+        language_listener: LanguageListener | None = None,
     ) -> None:
         self.state = AppState(language=default_language)
         self.photo_manager = photo_manager
         self.llm_manager = llm_manager
+        self.language_listener = language_listener
         self._emit: EventEmitter | None = None
 
     def set_event_emitter(self, emitter: EventEmitter) -> None:
@@ -68,6 +71,8 @@ class ApplicationController:
         if event.event_type in {"feature.end_letter", "feature.end_qa"}:
             # There is no active dictation session to end.
             return ()
+        if event.event_type == "feature.take_photo":
+            return self._take_photo_by_voice(event)
         if event.event_type.startswith("intent."):
             command_type = event.event_type.removeprefix("intent.")
             return (
@@ -80,6 +85,10 @@ class ApplicationController:
                     },
                 ),
             )
+        if event.event_type == "mode.switch_english":
+            return self._set_language("en", event)
+        if event.event_type == "mode.switch_chinese":
+            return self._set_language("zh", event)
         if event.event_type == "gesture.open_palm":
             return self._switch_language(event)
         if event.event_type == "gesture.victory":
@@ -120,6 +129,39 @@ class ApplicationController:
             return ()
         return ()
 
+    def _take_photo_by_voice(
+        self,
+        event: PerceptionEvent,
+    ) -> tuple[PerceptionEvent, ...]:
+        """Capture the camera frame shortly after the keyword and print it."""
+        if self.photo_manager is None:
+            return (
+                self._result(
+                    "photo.capture_failed",
+                    event,
+                    {"reason": "photo_feature_disabled"},
+                ),
+            )
+        delay_seconds = float(
+            getattr(self.photo_manager, "voice_delay_seconds")
+        )
+        schedule = getattr(self.photo_manager, "schedule")
+        started = schedule(
+            event,
+            delay_seconds=delay_seconds,
+            print_photo=True,
+        )
+        if not started:
+            return ()
+        self.state.photo_state = "countdown"
+        return (
+            self._command(
+                "camera.capture_after",
+                event,
+                {"delay_ms": int(delay_seconds * 1000)},
+            ),
+        )
+
     def _llm_session_active(self) -> bool:
         return self.llm_manager is not None and bool(
             getattr(self.llm_manager, "active")
@@ -142,7 +184,12 @@ class ApplicationController:
                     ),
                 )
             return ()
-        await getattr(self.llm_manager, "start")(mode, event, initial_text)
+        await getattr(self.llm_manager, "start")(
+            mode,
+            event,
+            initial_text,
+            language=self.state.language,
+        )
         self.state.llm_mode = getattr(self.llm_manager, "mode")
         return ()
 
@@ -169,10 +216,13 @@ class ApplicationController:
             "wake",
             "mode.enter_chat",
             "mode.exit_chat",
+            "mode.switch_english",
+            "mode.switch_chinese",
             "feature.write_letter",
             "feature.start_qa",
             "feature.end_letter",
             "feature.end_qa",
+            "feature.take_photo",
         }
         if event.event_type in spoken_intents or event.event_type.startswith(
             "intent."
@@ -271,20 +321,33 @@ class ApplicationController:
         self,
         event: PerceptionEvent,
     ) -> tuple[PerceptionEvent, ...]:
+        target = "en" if self.state.language == "zh" else "zh"
+        return self._set_language(target, event)
+
+    def _set_language(
+        self,
+        target: str,
+        event: PerceptionEvent,
+    ) -> tuple[PerceptionEvent, ...]:
         previous = self.state.language
-        self.state.language = "en" if previous == "zh" else "zh"
+        if target == previous:
+            return ()
+        self.state.language = target
+        if self.language_listener is not None:
+            # Keep downstream consumers (such as the ASR backend) in sync.
+            self.language_listener(target)
         return (
             self._command(
                 "language.set",
                 event,
-                {"language": self.state.language},
+                {"language": target},
             ),
             self._result(
                 "language.changed",
                 event,
                 {
                     "previous": previous,
-                    "current": self.state.language,
+                    "current": target,
                 },
             ),
         )

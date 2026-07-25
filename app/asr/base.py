@@ -13,3 +13,6 @@ class ASRBackend(ABC):
     @abstractmethod
     async def transcribe(self, audio: AudioData) -> str:
         raise NotImplementedError
+
+    def set_language(self, language: str) -> None:
+        """Switch the transcription language; a no-op unless supported."""

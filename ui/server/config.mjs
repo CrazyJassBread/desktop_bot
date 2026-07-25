@@ -21,6 +21,10 @@ export const config = Object.freeze({
     apiToken: String(process.env.BACKEND_API_TOKEN || "").trim(),
     transcribePath: apiPath(process.env.BACKEND_TRANSCRIBE_PATH, "/api/transcriptions"),
     printPath: apiPath(process.env.BACKEND_PRINT_PATH, "/api/print-jobs")
+  },
+  device: {
+    apiToken: String(process.env.DEVICE_API_TOKEN || "").trim(),
+    userEmail: String(process.env.DEVICE_USER_EMAIL || "hello@aihub.local").trim()
   }
 });
 

@@ -84,6 +84,17 @@ def test_custom_keyword_becomes_extensible_feature_command():
     assert match.payload_text == "播放爵士"
 
 
+def test_take_photo_keyword_is_detected():
+    detector = KeywordDetector(KeywordConfig())
+    match = detector.detect("小 A，帮我拍照")
+    assert match is not None
+    assert match.event_type == "feature.take_photo"
+    assert match.keyword == "帮我拍照"
+    match = detector.detect("拍照")
+    assert match is not None
+    assert match.event_type == "feature.take_photo"
+
+
 def test_event_cache_is_bounded_and_expires_old_events():
     now = [100.0]
     cache = EventCache(2, 10, clock=lambda: now[0])
@@ -136,6 +147,66 @@ async def test_audio_runtime_keeps_transcripts_and_keyword_intents(caplog):
     assert '"matched_event": null' in caplog.text
     assert '"transcript": "小A，帮我写信"' in caplog.text
     assert '"matched_event": "feature.write_letter"' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_audio_busy_tracks_capture_and_asr_in_flight():
+    class SlowASR(ASRBackend):
+        def __init__(self) -> None:
+            self.release = asyncio.Event()
+
+        async def transcribe(self, audio: AudioData) -> str:
+            await self.release.wait()
+            return "长语音结果"
+
+    vad = MockVADBackend([0.9, 0.9, 0.0, 0.0])
+    segmenter = StreamingAudioPipeline(
+        VADConfig(
+            min_speech_duration_ms=64,
+            min_silence_duration_ms=64,
+            pre_roll_ms=0,
+        ),
+        vad,
+    )
+    asr = SlowASR()
+    daemon = PerceptionDaemon(
+        EventCache(),
+        audio_source=FiniteAudioSource(4),
+        audio_segmenter=segmenter,
+        audio_processor=KeywordASRProcessor(
+            asr,
+            KeywordDetector(KeywordConfig()),
+        ),
+    )
+    assert daemon.audio_busy is False
+
+    runner = asyncio.create_task(daemon.run())
+    await asyncio.sleep(0.05)
+    # The utterance is still being transcribed; the pipeline reports busy.
+    assert daemon.audio_busy is True
+    asr.release.set()
+    await runner
+    assert daemon.audio_busy is False
+
+
+@pytest.mark.asyncio
+async def test_audio_busy_while_vad_is_capturing_speech():
+    segmenter = StreamingAudioPipeline(
+        VADConfig(pre_roll_ms=0),
+        MockVADBackend([0.9]),
+    )
+    daemon = PerceptionDaemon(
+        EventCache(),
+        audio_source=FiniteAudioSource(0),
+        audio_segmenter=segmenter,
+        audio_processor=KeywordASRProcessor(
+            SequenceASR([]),
+            KeywordDetector(KeywordConfig()),
+        ),
+    )
+    assert daemon.audio_busy is False
+    await segmenter.accept(np.ones(512, dtype=np.float32) * 0.1)
+    assert daemon.audio_busy is True
 
 
 @pytest.mark.asyncio
@@ -237,4 +308,146 @@ async def test_victory_captures_latest_frame_after_delay(tmp_path):
     ]
     assert controller.state.photo_state == "idle"
     assert len(list(tmp_path.glob("*.jpg"))) == 1
+    await controller.aclose()
+
+
+class RecordingPrinter:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.printed: list[str] = []
+
+    def print_photo(self, path) -> dict[str, object]:
+        if self.error is not None:
+            raise self.error
+        self.printed.append(str(path))
+        return {"chunks": 1}
+
+
+class StubLLMManager:
+    def __init__(self) -> None:
+        self.active = True
+        self.mode = "letter"
+        self.transcripts: list[str] = []
+
+    def set_event_emitter(self, emitter) -> None:
+        pass
+
+    async def add_transcript(self, text: str) -> None:
+        self.transcripts.append(text)
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_voice_take_photo_captures_and_prints(tmp_path):
+    store = LatestFrameStore()
+    printer = RecordingPrinter()
+    manager = PhotoCaptureManager(
+        store,
+        delay_seconds=5,
+        voice_delay_seconds=0.01,
+        max_frame_age_seconds=1,
+        output_dir=tmp_path,
+        printer=printer,
+    )
+    controller = ApplicationController(photo_manager=manager)
+    emitted: list[PerceptionEvent] = []
+
+    async def emit(event: PerceptionEvent) -> None:
+        emitted.append(event)
+        await controller.handle(event)
+
+    controller.set_event_emitter(emit)
+    store.update(
+        ImageRequest(
+            jpeg_bytes(),
+            session_id="bot",
+            request_id="frame-1",
+        )
+    )
+    commands = await controller.handle(
+        PerceptionEvent("feature.take_photo", "audio")
+    )
+    assert [item.event_type for item in commands] == [
+        "command.camera.capture_after"
+    ]
+    # The voice trigger uses its own short countdown, not the gesture delay.
+    assert commands[0].payload["parameters"]["delay_ms"] == 10
+    assert controller.state.photo_state == "countdown"
+
+    await asyncio.sleep(0.05)
+
+    assert [item.event_type for item in emitted] == [
+        "photo.captured",
+        "photo.printed",
+        "photo.completed",
+    ]
+    assert controller.state.photo_state == "idle"
+    assert printer.printed == [str(next(tmp_path.glob("*.jpg")).resolve())]
+    await controller.aclose()
+
+
+@pytest.mark.asyncio
+async def test_voice_take_photo_print_failure_still_completes(tmp_path):
+    store = LatestFrameStore()
+    manager = PhotoCaptureManager(
+        store,
+        voice_delay_seconds=0.01,
+        max_frame_age_seconds=1,
+        output_dir=tmp_path,
+        printer=RecordingPrinter(error=OSError("printer offline")),
+    )
+    controller = ApplicationController(photo_manager=manager)
+    emitted: list[PerceptionEvent] = []
+
+    async def emit(event: PerceptionEvent) -> None:
+        emitted.append(event)
+        await controller.handle(event)
+
+    controller.set_event_emitter(emit)
+    store.update(ImageRequest(jpeg_bytes(), session_id="bot"))
+    await controller.handle(PerceptionEvent("feature.take_photo", "audio"))
+
+    await asyncio.sleep(0.05)
+
+    assert [item.event_type for item in emitted] == [
+        "photo.captured",
+        "photo.print_failed",
+        "photo.completed",
+    ]
+    assert emitted[1].payload["reason"] == "OSError"
+    await controller.aclose()
+
+
+@pytest.mark.asyncio
+async def test_voice_take_photo_without_manager_reports_failure():
+    controller = ApplicationController()
+    results = await controller.handle(
+        PerceptionEvent("feature.take_photo", "audio")
+    )
+    assert [item.event_type for item in results] == ["photo.capture_failed"]
+    assert results[0].payload["reason"] == "photo_feature_disabled"
+    await controller.aclose()
+
+
+@pytest.mark.asyncio
+async def test_take_photo_keyword_is_dictation_during_llm_session(tmp_path):
+    store = LatestFrameStore()
+    manager = PhotoCaptureManager(store, output_dir=tmp_path)
+    llm_manager = StubLLMManager()
+    controller = ApplicationController(
+        photo_manager=manager,
+        llm_manager=llm_manager,
+    )
+    results = await controller.handle(
+        PerceptionEvent(
+            "feature.take_photo",
+            "audio",
+            payload={"transcript": "帮我拍照"},
+        )
+    )
+    assert results == ()
+    assert llm_manager.transcripts == ["帮我拍照"]
+    assert controller.state.photo_state == "idle"
     await controller.aclose()

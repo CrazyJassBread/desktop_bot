@@ -7,3 +7,18 @@
 {"time": "2026-07-25T19:49:32.193", "event_type": "speech.transcribed", "transcript": "所以说我在想我应该分享些什么东西", "audio_duration_seconds": 3.68, "matched_event": null}
 {"time": "2026-07-25T19:49:36.158", "event_type": "speech.transcribed", "transcript": "结束写信", "audio_duration_seconds": 1.76, "matched_event": "feature.end_letter"}
 {"time": "2026-07-25T19:50:00.692", "event_type": "speech.transcribed", "transcript": "我先拿去拿吧哦 OK OK哦 又来了一层鲜的椅子可以", "audio_duration_seconds": 12.512, "matched_event": null}
+{"time": "2026-07-25T20:46:55.668", "event_type": "speech.transcribed", "transcript": "唯唯有声音吗可以听到声音吗", "audio_duration_seconds": 5.568, "matched_event": null}
+{"time": "2026-07-25T20:47:08.514", "event_type": "speech.transcribed", "transcript": "我有写信有的有的我看一眼这keyboard的声音他这个好慢开始写信", "audio_duration_seconds": 12.992, "matched_event": "feature.write_letter"}
+{"time": "2026-07-25T20:47:22.827", "event_type": "speech.transcribed", "transcript": "没有这开着写信没有匹配到吗", "audio_duration_seconds": 11.264, "matched_event": null}
+{"time": "2026-07-25T20:47:30.212", "event_type": "speech.transcribed", "transcript": "哦 等下匹配到了 稍等 稍等", "audio_duration_seconds": 3.2, "matched_event": null}
+{"time": "2026-07-25T20:47:33.688", "event_type": "speech.transcribed", "transcript": "他怎么感染就那么混乱了", "audio_duration_seconds": 2.56, "matched_event": null}
+{"time": "2026-07-25T20:47:45.933", "event_type": "speech.transcribed", "transcript": "开始写信", "audio_duration_seconds": 3.84, "matched_event": "feature.write_letter"}
+{"time": "2026-07-25T20:47:57.503", "event_type": "speech.transcribed", "transcript": "我现在想写一封信给我的朋友介绍我们这个产品的功能就是它是一个写信打印机", "audio_duration_seconds": 8.384, "matched_event": null}
+{"time": "2026-07-25T21:10:54.891", "event_type": "speech.transcribed", "transcript": "嗨 你好", "audio_duration_seconds": 1.888, "matched_event": null}
+{"time": "2026-07-25T21:11:02.692", "event_type": "speech.transcribed", "transcript": "这叫K-word intro哦 他有呢对", "audio_duration_seconds": 6.944, "matched_event": null}
+{"time": "2026-07-25T21:11:11.854", "event_type": "speech.transcribed", "transcript": "切换到英文", "audio_duration_seconds": 8.352, "matched_event": "mode.switch_english"}
+{"time": "2026-07-25T21:11:21.582", "event_type": "speech.transcribed", "transcript": "Test the ASR mode.", "audio_duration_seconds": 7.616, "matched_event": null}
+{"time": "2026-07-25T21:11:27.023", "event_type": "speech.transcribed", "transcript": "Have you changed? Have you switched to the English model?", "audio_duration_seconds": 4.768, "matched_event": "mode.switch_english"}
+{"time": "2026-07-25T21:11:44.568", "event_type": "speech.transcribed", "transcript": "Oh, yeah, it's okay. Then what about English? Can you speak Chinese or switch to Chinese? I want to take a photo of it.", "audio_duration_seconds": 16.704, "matched_event": "mode.switch_chinese"}
+{"time": "2026-07-25T21:11:52.556", "event_type": "speech.transcribed", "transcript": "噢有的有的Rather later, start later, finish later", "audio_duration_seconds": 6.88, "matched_event": null}
+{"time": "2026-07-25T22:20:49.824", "event_type": "speech.transcribed", "transcript": "7号人身房里店家什么类型尤其这个人带进去会在哪里我觉得很像我觉得你能够选到一个一个人行不行我说的我们上的就是大陆的大陆的一个人大陆爆炸大陆的一个人然后他们有两个小伙伴现在招牌都在你应该是在华丽西滨北大陆的一个人小伙伴百分百的我在家里他说行了吧乐器你跟我们一起去海庭对好好好", "audio_duration_seconds": 60.0, "matched_event": null}

@@ -55,6 +55,9 @@ class KeywordDetector:
             ("feature.end_letter", config.end_letter),
             ("feature.start_qa", config.start_qa),
             ("feature.end_qa", config.end_qa),
+            ("feature.take_photo", config.take_photo),
+            ("mode.switch_english", config.switch_to_english),
+            ("mode.switch_chinese", config.switch_to_chinese),
             *(
                 (f"intent.{command_type}", phrases)
                 for command_type, phrases in config.custom.items()

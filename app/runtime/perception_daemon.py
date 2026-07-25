@@ -76,6 +76,7 @@ class PerceptionDaemon:
         )
         self.metrics = PerceptionMetrics()
         self.running = False
+        self._asr_busy = False
         self._event_sequence = 0
         if self.application_controller is not None:
             getattr(
@@ -114,6 +115,7 @@ class PerceptionDaemon:
         assert self.audio_processor is not None
         while True:
             item = await self._utterances.get()
+            self._asr_busy = True
             try:
                 if item is _END:
                     return
@@ -132,7 +134,16 @@ class PerceptionDaemon:
                         self.metrics.keyword_hits += 1
                     await self.emit(event)
             finally:
+                self._asr_busy = False
                 self._utterances.task_done()
+
+    @property
+    def audio_busy(self) -> bool:
+        """True while speech is being captured, queued or transcribed."""
+        capturing = (
+            self.audio_segmenter is not None and self.audio_segmenter.is_active
+        )
+        return capturing or not self._utterances.empty() or self._asr_busy
 
     async def _process_vision(self) -> None:
         assert self.image_source is not None

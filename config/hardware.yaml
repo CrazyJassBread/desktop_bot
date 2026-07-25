@@ -6,11 +6,13 @@
 hardware:
   audio_enabled: true
   audio_host: 0.0.0.0
-  audio_port: 8081
+  audio_port: 8080
   audio_frame_samples: 512
   audio_queue_size: 256
   vision_enabled: true
   vision_host: 0.0.0.0
-  vision_port: 8082
+  vision_port: 8081
   vision_upload_path: /upload
   session_id: bot
+
+# printer ip 10.76.14.77

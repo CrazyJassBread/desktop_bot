@@ -1,0 +1,8 @@
+# Paper Bridge web integration. The bot posts finished letters to the
+# ui server; the token must match DEVICE_API_TOKEN in ui/.env.local.
+
+ui:
+  enabled: true
+  base_url: http://127.0.0.1:18000
+  device_token: bot-device-token
+  timeout_seconds: 15

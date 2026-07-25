@@ -19,8 +19,8 @@ Open Palm → 异步等待 2 秒 → 最新 JPEG → AI 照片处理程序      
 - [App 完整工作 Pipeline](docs/app-pipeline.md)：启动、信号来源、传输过程、
   最终输出和逐文件职责；
 - [持续感知 Runtime](docs/perception-runtime.md)：核心运行策略和事件格式。
-- [Web 集成 MVP](integrations/ai-hub-os-web)：AI Hub OS Web + API，包含
-  DeepSeek 意图识别、AI Letter、热敏打印模板、前端设备页和 Web bridge。
+- [Web 集成 Paper Bridge](ui)：纸间桥 Web 应用（账号、朋友圈、书信、
+  打印队列），设备口述的信件会自动投递到这里。
 
 ## 环境
 
@@ -155,7 +155,8 @@ powershell -ExecutionPolicy Bypass -File scripts/watch_mic_transcripts.ps1
 该脚本会同时显示：
 
 - `BOT speech.transcribed`：desktop_bot 从板载麦克风识别出的文本；
-- `WEB letter.*`：Web bridge 触发的写信、发送和打印联动结果；
+- `WEB letter.*`：信件投递到 Paper Bridge 的结果（`letter.delivered` /
+  `letter.delivery_failed`）；
 - `LIVE / STALE / WAITING`：音频帧是否仍在实时进入。
 
 如需统一修改硬件端口：
@@ -165,34 +166,31 @@ powershell -ExecutionPolicy Bypass -File scripts/watch_mic_transcripts.ps1
 - `8081`：ESP32-S3 麦克风 TCP PCM；
 - `8082`：ESP32-S3 图像 HTTP 上传；
 - `8090`：desktop_bot HTTP/WebSocket API；
-- `18000`：AI Hub OS Web MVP。
+- `18000`：Paper Bridge Web 应用（[ui/](ui)）。
 
-说明：`integrations/ai-hub-os-web` 当前只把硬件作为“打印机输出”和“照片上传来源”使用。
-Web 端语音使用浏览器内置 Web Speech API；Web 不再接入 desktop_bot 的板载麦克风 ASR/手势事件桥。
+说明：`ui` 是纸间桥 Web 应用（账号、朋友圈、书信草稿箱、打印队列）。
+写信模式结束后，desktop_bot 会把整理好的信件 POST 到
+`/api/v1/device/letters`：识别出的收信人若在发件人好友中则自动生成
+图片并加入对方打印队列；否则保存为无收信人草稿，可在网页上编辑并
+补选收信人后发送。设备绑定通过 `ui/.env.local` 的 `DEVICE_USER_EMAIL`
+（默认 hello@aihub.local）与 `DEVICE_API_TOKEN`（需与
+`config/ui.yaml` 的 `ui.device_token` 一致）配置。
 
-启动 Web MVP：
+启动 Web 应用：
 
-```powershell
-cd integrations/ai-hub-os-web
-copy .env.example .env.local
+```bash
+cd ui
+cp .env.example .env.local   # 按需修改 DEVICE_API_TOKEN 等
 npm install
 npm run dev
 ```
 
-页面地址：
+页面地址：`http://127.0.0.1:18000`（演示账户 hello@aihub.local / Demo1234）。
 
-- `http://127.0.0.1:18000/education`：浏览器麦克风、学习 AI 和可打印内容；
-- `http://127.0.0.1:18000/letter/create`：写信、上传照片、预览 384 px 热敏模板、发送打印；
-- `http://127.0.0.1:18000/profile`：个人主页和回忆相册，硬件拍摄照片会自动上传到这里；
-- `http://127.0.0.1:18000/device`：设备状态、自动打印策略和打印队列。
+一键同时启动 bot 与 Web：
 
-硬件端拍照完成后可直接上传到 Web：
-
-```http
-POST http://127.0.0.1:18000/api/v1/photos/hardware
-Content-Type: multipart/form-data
-
-image=<JPEG/PNG/WebP file>
+```bash
+bash scripts/demo.sh
 ```
 
 ## 配置

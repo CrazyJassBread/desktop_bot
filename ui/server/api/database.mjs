@@ -80,7 +80,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS letters (
     id TEXT PRIMARY KEY,
     sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_id TEXT REFERENCES users(id) ON DELETE CASCADE,
     source_record_id TEXT REFERENCES records(id) ON DELETE SET NULL,
     subject TEXT NOT NULL,
     body TEXT NOT NULL,
@@ -101,6 +101,35 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+// Older databases created letters.recipient_id as NOT NULL; rebuild the table
+// so device-submitted drafts without a recipient can be stored.
+const recipientColumn = db.prepare("SELECT [notnull] AS required FROM pragma_table_info('letters') WHERE name='recipient_id'").get();
+if (recipientColumn?.required) {
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    BEGIN;
+    CREATE TABLE letters_new (
+      id TEXT PRIMARY KEY,
+      sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+      source_record_id TEXT REFERENCES records(id) ON DELETE SET NULL,
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL,
+      image_path TEXT,
+      status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','received','queued','printed','failed')),
+      sent_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO letters_new SELECT id,sender_id,recipient_id,source_record_id,subject,body,image_path,status,sent_at,created_at,updated_at FROM letters;
+    DROP TABLE letters;
+    ALTER TABLE letters_new RENAME TO letters;
+    CREATE INDEX IF NOT EXISTS idx_letters_people ON letters(sender_id, recipient_id, created_at DESC);
+    COMMIT;
+    PRAGMA foreign_keys = ON;
+  `);
+}
 
 const seedUsers = [
   ["usr-lin", "hello@aihub.local", "Demo1234", "Lin An", "zh"],

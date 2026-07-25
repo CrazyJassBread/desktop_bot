@@ -81,6 +81,35 @@ class KeywordConfig:
     end_qa: list[str] = field(
         default_factory=lambda: ["结束问答", "问完了"]
     )
+    take_photo: list[str] = field(
+        default_factory=lambda: [
+            # Longer phrases first so the plain "拍照" fallback does not
+            # leave leading words behind in the payload text.
+            "帮我拍照",
+            "拍张照",
+            "拍照",
+            "take a photo",
+            "take a picture",
+        ]
+    )
+    switch_to_english: list[str] = field(
+        default_factory=lambda: [
+            "切换英文",
+            "切换到英文",
+            "英文模式",
+            "switch to English",
+            "English mode",
+        ]
+    )
+    switch_to_chinese: list[str] = field(
+        default_factory=lambda: [
+            "切换中文",
+            "切换到中文",
+            "中文模式",
+            "switch to Chinese",
+            "Chinese mode",
+        ]
+    )
     custom: dict[str, list[str]] = field(default_factory=dict)
 
 
@@ -114,6 +143,7 @@ class ApplicationConfig:
     default_language: str = "zh"
     photo_enabled: bool = True
     photo_delay_seconds: float = 2.0
+    voice_photo_delay_seconds: float = 1.0
     photo_frame_max_age_seconds: float = 1.0
     photo_output_dir: str = "captured_photos"
     photo_processor_url: str = ""
@@ -131,11 +161,27 @@ class APIConfig:
 _DEFAULT_LETTER_PROMPT = (
     "你是一位文笔优美的书信作者。请把用户口述的零散内容整理成一封完整的中文信件："
     "清除口语赘词与重复，保留原意与关键信息，文风文艺优美、真挚自然。"
-    "只输出信件正文，不要任何解释。"
+    "同时从口述内容中识别收信人是谁。只输出一个 JSON 对象，不要任何解释，格式为："
+    '{"recipient": "收信人称呼，识别不出时为 null", "subject": "简短主题", '
+    '"body": "信件正文"}'
 )
 _DEFAULT_QA_PROMPT = (
     "你是一个简洁的语音问答助手。请从用户口述内容中找出问题，"
     "用简短、直接的中文回答。只输出答案本身，不要重复问题，不要多余解释。"
+)
+_DEFAULT_LETTER_PROMPT_EN = (
+    "You are a letter writer with a graceful style. Turn the user's dictated "
+    "fragments into one complete English letter: remove filler words and "
+    "repetition, keep the original meaning and key details, and do not "
+    "embellish or invent content. Also identify the recipient from the "
+    "dictation. Output exactly one JSON object with no explanation, in the "
+    'format: {"recipient": "name or null when unknown", '
+    '"subject": "short subject", "body": "letter body"}'
+)
+_DEFAULT_QA_PROMPT_EN = (
+    "You are a concise voice Q&A assistant. Find the question in the user's "
+    "dictation and answer it in short, direct English. Output only the "
+    "answer itself, without repeating the question or adding explanations."
 )
 
 
@@ -152,6 +198,30 @@ class LLMConfig:
     silence_timeout_seconds: float = 10.0
     letter_system_prompt: str = _DEFAULT_LETTER_PROMPT
     qa_system_prompt: str = _DEFAULT_QA_PROMPT
+    letter_system_prompt_en: str = _DEFAULT_LETTER_PROMPT_EN
+    qa_system_prompt_en: str = _DEFAULT_QA_PROMPT_EN
+
+
+@dataclass
+class UIConfig:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:18000"
+    device_token: str = ""
+    timeout_seconds: float = 15.0
+
+
+@dataclass
+class PrinterConfig:
+    enabled: bool = False
+    base_url: str = "http://10.76.10.141"
+    timeout_seconds: float = 30.0
+    pixel_size: int = 4
+    grayscale_levels: int = 4
+    contrast: float = 1.2
+    brightness: float = 1.0
+    dither: bool = True
+    rotate_180: bool = False
+    max_chunk_height: int = 1200
 
 
 @dataclass
@@ -166,6 +236,8 @@ class AppConfig:
     application: ApplicationConfig = field(default_factory=ApplicationConfig)
     api: APIConfig = field(default_factory=APIConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
+    printer: PrinterConfig = field(default_factory=PrinterConfig)
 
 
 _SECTIONS: dict[str, type[Any]] = {
@@ -179,6 +251,8 @@ _SECTIONS: dict[str, type[Any]] = {
     "application": ApplicationConfig,
     "api": APIConfig,
     "llm": LLMConfig,
+    "ui": UIConfig,
+    "printer": PrinterConfig,
 }
 
 
@@ -273,6 +347,9 @@ def _validate(config: AppConfig) -> None:
         ("keywords.end_letter", config.keywords.end_letter),
         ("keywords.start_qa", config.keywords.start_qa),
         ("keywords.end_qa", config.keywords.end_qa),
+        ("keywords.take_photo", config.keywords.take_photo),
+        ("keywords.switch_to_english", config.keywords.switch_to_english),
+        ("keywords.switch_to_chinese", config.keywords.switch_to_chinese),
     ):
         if not isinstance(phrases, list) or not all(
             isinstance(item, str) and item.strip() for item in phrases
@@ -317,6 +394,10 @@ def _validate(config: AppConfig) -> None:
     _positive(
         config.application.photo_delay_seconds,
         "application.photo_delay_seconds",
+    )
+    _positive(
+        config.application.voice_photo_delay_seconds,
+        "application.voice_photo_delay_seconds",
     )
     _positive(
         config.application.photo_frame_max_age_seconds,
@@ -366,6 +447,11 @@ def _validate(config: AppConfig) -> None:
         for name, value in (
             ("llm.letter_system_prompt", config.llm.letter_system_prompt),
             ("llm.qa_system_prompt", config.llm.qa_system_prompt),
+            (
+                "llm.letter_system_prompt_en",
+                config.llm.letter_system_prompt_en,
+            ),
+            ("llm.qa_system_prompt_en", config.llm.qa_system_prompt_en),
         ):
             if not isinstance(value, str) or not value.strip():
                 raise ConfigurationError(f"{name} cannot be empty")
@@ -386,6 +472,29 @@ def _validate(config: AppConfig) -> None:
             raise ConfigurationError(
                 "llm.api_key or llm.api_key_env must be provided"
             )
+    _positive(config.ui.timeout_seconds, "ui.timeout_seconds")
+    if config.ui.enabled:
+        for name, value in (
+            ("ui.base_url", config.ui.base_url),
+            ("ui.device_token", config.ui.device_token),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError(f"{name} cannot be empty")
+    _positive(config.printer.timeout_seconds, "printer.timeout_seconds")
+    _positive(config.printer.contrast, "printer.contrast")
+    _positive(config.printer.brightness, "printer.brightness")
+    _positive_int(config.printer.pixel_size, "printer.pixel_size")
+    _positive_int(config.printer.max_chunk_height, "printer.max_chunk_height")
+    _positive_int(config.printer.grayscale_levels, "printer.grayscale_levels")
+    if not 2 <= config.printer.grayscale_levels <= 256:
+        raise ConfigurationError(
+            "printer.grayscale_levels must be between 2 and 256"
+        )
+    if config.printer.enabled:
+        if not isinstance(config.printer.base_url, str) or not (
+            config.printer.base_url.strip()
+        ):
+            raise ConfigurationError("printer.base_url cannot be empty")
 
 
 def _load_file(config_path: Path) -> dict[str, Any]:

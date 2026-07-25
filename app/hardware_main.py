@@ -24,6 +24,7 @@ from app.factories import (
 )
 from app.features.llm_session import LLMSessionManager
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
+from app.features.photo_printer import ThermalPrinterClient
 from app.runtime.perception_daemon import PerceptionDaemon
 from app.transport.hardware_sources import (
     HTTPJPEGImageSource,
@@ -91,6 +92,7 @@ def build_daemon(
     audio_source = None
     segmenter = None
     audio_processor = None
+    asr_backend = None
     image_source = None
     vision_processor = None
     gesture_backend: GestureBackend | None = None
@@ -126,8 +128,9 @@ def build_daemon(
             build_vad(config),
             config.audio.target_sample_rate,
         )
+        asr_backend = build_asr(config)
         audio_processor = KeywordASRProcessor(
-            build_asr(config),
+            asr_backend,
             KeywordDetector(config.keywords),
             session_id=session_id,
         )
@@ -156,9 +159,15 @@ def build_daemon(
             gesture_backend,
         )
         if config.application.photo_enabled:
+            printer_client = None
+            if config.printer.enabled:
+                printer_client = ThermalPrinterClient(config.printer)
             photo_manager = PhotoCaptureManager(
                 latest_frame_store,
                 delay_seconds=config.application.photo_delay_seconds,
+                voice_delay_seconds=(
+                    config.application.voice_photo_delay_seconds
+                ),
                 max_frame_age_seconds=(
                     config.application.photo_frame_max_age_seconds
                 ),
@@ -167,6 +176,7 @@ def build_daemon(
                 timeout_seconds=(
                     config.application.downstream_timeout_seconds
                 ),
+                printer=printer_client,
             )
 
     llm_manager = None
@@ -177,13 +187,21 @@ def build_daemon(
             silence_timeout_seconds=config.llm.silence_timeout_seconds,
             letter_system_prompt=config.llm.letter_system_prompt,
             qa_system_prompt=config.llm.qa_system_prompt,
+            letter_system_prompt_en=config.llm.letter_system_prompt_en,
+            qa_system_prompt_en=config.llm.qa_system_prompt_en,
         )
 
     controller = ApplicationController(
         default_language=config.application.default_language,
         photo_manager=photo_manager,
         llm_manager=llm_manager,
+        language_listener=(
+            asr_backend.set_language if asr_backend is not None else None
+        ),
     )
+    if asr_backend is not None:
+        # Align the ASR transcription language with the initial app language.
+        asr_backend.set_language(config.application.default_language)
 
     daemon = PerceptionDaemon(
         cache,
@@ -197,6 +215,10 @@ def build_daemon(
         application_controller=controller,
         latest_frame_store=latest_frame_store,
     )
+    if llm_manager is not None:
+        # Defer the silence countdown while speech is still being captured
+        # or transcribed, so long dictations are not cut off mid-sentence.
+        llm_manager.set_activity_probe(lambda: daemon.audio_busy)
     return daemon, gesture_backend
 
 
@@ -206,6 +228,7 @@ async def run(args: argparse.Namespace) -> None:
     daemon, gesture_backend = build_daemon(config, args)
     api_server = None
     recorder = None
+    outbox = None
     try:
         if args.mode == "mictest":
             from app.features.result_recorder import ResultRecorder
@@ -217,6 +240,18 @@ async def run(args: argparse.Namespace) -> None:
                 recorder.asr_path,
                 recorder.llm_path,
             )
+        if config.ui.enabled:
+            from app.features.letter_outbox import LetterOutbox
+
+            outbox = LetterOutbox(
+                daemon.event_bus,
+                base_url=config.ui.base_url,
+                device_token=config.ui.device_token,
+                timeout_seconds=config.ui.timeout_seconds,
+            )
+            outbox.set_event_emitter(daemon.emit)
+            outbox.start()
+            LOGGER.info("letter outbox delivering to %s", config.ui.base_url)
         if config.api.enabled:
             from app.api.server import EventAPIServer
 
@@ -241,6 +276,8 @@ async def run(args: argparse.Namespace) -> None:
         )
         await daemon.run()
     finally:
+        if outbox is not None:
+            await outbox.aclose()
         if recorder is not None:
             await recorder.aclose()
         if api_server is not None:

@@ -67,6 +67,15 @@ async function requestBackendTranscript(user, language) {
   return { transcript: transcript.slice(0, 10_000), provider: payload.provider || "recording-backend" };
 }
 
+async function renderLetterImage(letter) {
+  const rendered = buildThermalLetterSvg({ letterId: letter.id, sender: letter.sender_name, recipient: letter.recipient_name, subject: letter.subject, body: letter.body, date: new Date().toISOString().slice(0, 10) });
+  await mkdir(generatedRoot, { recursive: true });
+  const fileName = `${letter.id}.png`;
+  await writeFile(join(generatedRoot, fileName), await sharp(Buffer.from(rendered.svg)).flatten({ background: "#ffffff" }).png().toBuffer());
+  db.prepare("UPDATE letters SET image_path=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(fileName, letter.id);
+  return rendered;
+}
+
 function letterPayload(row) {
   return { id: row.id, senderId: row.sender_id, recipientId: row.recipient_id, senderName: row.sender_name, recipientName: row.recipient_name, sourceRecordId: row.source_record_id, subject: row.subject, body: row.body, imageUrl: row.image_path ? `/api/v1/letters/${encodeURIComponent(row.id)}/image` : null, status: row.status, createdAt: row.created_at, sentAt: row.sent_at };
 }
@@ -166,6 +175,41 @@ export async function handleApiRequest(request, response, requestId) {
       return json(response, 200, { success: true }, { "Set-Cookie": clearCookie() });
     }
 
+    if (method === "POST" && path === "/device/letters") {
+      if (!config.device.apiToken) return problem(response, 503, "DEVICE_DISABLED", "Device letter intake is not configured.", requestId);
+      const auth = String(request.headers.authorization || "");
+      if (auth !== `Bearer ${config.device.apiToken}`) return problem(response, 401, "INVALID_DEVICE_TOKEN", "Device token is missing or incorrect.", requestId);
+      const sender = db.prepare("SELECT * FROM users WHERE email=? COLLATE NOCASE").get(config.device.userEmail);
+      if (!sender) return problem(response, 503, "DEVICE_USER_MISSING", "The device user account does not exist.", requestId);
+      const body = await readJson(request);
+      const content = String(body.body || "").trim().slice(0, 3000);
+      if (!content) return problem(response, 422, "INVALID_LETTER", "Letter body is required.", requestId);
+      const subject = String(body.subject || "").trim().slice(0, 120) || (sender.preferred_language === "zh" ? "语音信件" : "A voice letter");
+      const rawTranscript = String(body.rawTranscript || "").trim().slice(0, 10_000);
+      let recordId = null;
+      if (rawTranscript) {
+        recordId = `rec-${randomUUID()}`;
+        const title = sender.preferred_language === "zh" ? `设备口述 ${new Date().toLocaleDateString("zh-CN")}` : `Device dictation ${new Date().toLocaleDateString("en")}`;
+        db.prepare("INSERT INTO records (id,user_id,title,transcript,status) VALUES (?,?,?,?,'ready')").run(recordId, sender.id, title, rawTranscript);
+      }
+      const wantedName = String(body.recipientName || "").trim().toLowerCase();
+      const recipient = wantedName ? db.prepare(`SELECT u.* FROM friendships f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.status='accepted'`).all(sender.id)
+        .find((friend) => String(friend.display_name).trim().toLowerCase() === wantedName) : null;
+      const letterId = `ltr-${randomUUID()}`;
+      db.prepare("INSERT INTO letters (id,sender_id,recipient_id,source_record_id,subject,body,status) VALUES (?,?,?,?,?,?,'draft')").run(letterId, sender.id, recipient ? recipient.id : null, recordId, subject, content);
+      if (!recipient) return json(response, 201, { letterId, status: "draft", matchedRecipient: null });
+      const letter = db.prepare("SELECT l.*,s.display_name sender_name,r.display_name recipient_name FROM letters l JOIN users s ON s.id=l.sender_id LEFT JOIN users r ON r.id=l.recipient_id WHERE l.id=?").get(letterId);
+      await renderLetterImage(letter);
+      const printJobId = `print-${randomUUID()}`;
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("UPDATE letters SET status='queued',sent_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(letterId);
+        db.prepare("INSERT INTO print_jobs (id,letter_id,user_id,status) VALUES (?,?,?,'queued')").run(printJobId, letterId, recipient.id);
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+      return json(response, 201, { letterId, status: "queued", matchedRecipient: recipient.display_name });
+    }
+
     const user = requireUser(request, response, requestId);
     if (!user) return true;
 
@@ -239,9 +283,9 @@ export async function handleApiRequest(request, response, requestId) {
     if (method === "GET" && path === "/letters") {
       const friendId = url.searchParams.get("friendId");
       let rows;
-      if (friendId) rows = db.prepare(`SELECT l.*,s.display_name sender_name,r.display_name recipient_name FROM letters l JOIN users s ON s.id=l.sender_id JOIN users r ON r.id=l.recipient_id
+      if (friendId) rows = db.prepare(`SELECT l.*,s.display_name sender_name,r.display_name recipient_name FROM letters l JOIN users s ON s.id=l.sender_id LEFT JOIN users r ON r.id=l.recipient_id
         WHERE (l.sender_id=? AND l.recipient_id=?) OR (l.sender_id=? AND l.recipient_id=?) ORDER BY l.created_at DESC`).all(user.id, friendId, friendId, user.id);
-      else rows = db.prepare(`SELECT l.*,s.display_name sender_name,r.display_name recipient_name FROM letters l JOIN users s ON s.id=l.sender_id JOIN users r ON r.id=l.recipient_id
+      else rows = db.prepare(`SELECT l.*,s.display_name sender_name,r.display_name recipient_name FROM letters l JOIN users s ON s.id=l.sender_id LEFT JOIN users r ON r.id=l.recipient_id
         WHERE l.sender_id=? OR l.recipient_id=? ORDER BY l.created_at DESC`).all(user.id, user.id);
       return json(response, 200, { items: rows.map(letterPayload) });
     }
@@ -263,18 +307,21 @@ export async function handleApiRequest(request, response, requestId) {
       const subject = String(body.subject || letter.subject).trim().slice(0, 120);
       const content = String(body.body || letter.body).trim().slice(0, 3000);
       if (!subject || !content) return problem(response, 422, "INVALID_LETTER", "Subject and letter body are required.", requestId);
-      db.prepare("UPDATE letters SET subject=?,body=?,image_path=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(subject, content, letter.id);
-      return json(response, 200, { letter: { id: letter.id, recipientId: letter.recipient_id, subject, body: content, status: "draft" } });
+      let recipientId = letter.recipient_id;
+      if (body.recipientId !== undefined && body.recipientId !== null && String(body.recipientId) !== String(letter.recipient_id || "")) {
+        const recipient = db.prepare(`SELECT u.* FROM friendships f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.friend_id=? AND f.status='accepted'`).get(user.id, String(body.recipientId));
+        if (!recipient) return problem(response, 422, "INVALID_RECIPIENT", "Choose someone from your social circle.", requestId);
+        recipientId = recipient.id;
+      }
+      db.prepare("UPDATE letters SET subject=?,body=?,recipient_id=?,image_path=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(subject, content, recipientId, letter.id);
+      return json(response, 200, { letter: { id: letter.id, recipientId, subject, body: content, status: "draft" } });
     }
     const renderMatch = path.match(/^\/letters\/([^/]+)\/render$/);
     if (method === "POST" && renderMatch) {
-      const letter = db.prepare(`SELECT l.*,s.display_name sender_name,r.display_name recipient_name FROM letters l JOIN users s ON s.id=l.sender_id JOIN users r ON r.id=l.recipient_id WHERE l.id=? AND l.sender_id=?`).get(renderMatch[1], user.id);
+      const letter = db.prepare(`SELECT l.*,s.display_name sender_name,r.display_name recipient_name FROM letters l JOIN users s ON s.id=l.sender_id LEFT JOIN users r ON r.id=l.recipient_id WHERE l.id=? AND l.sender_id=?`).get(renderMatch[1], user.id);
       if (!letter) return problem(response, 404, "NOT_FOUND", "Letter not found.", requestId);
-      const rendered = buildThermalLetterSvg({ letterId: letter.id, sender: letter.sender_name, recipient: letter.recipient_name, subject: letter.subject, body: letter.body, date: new Date().toISOString().slice(0, 10) });
-      await mkdir(generatedRoot, { recursive: true });
-      const fileName = `${letter.id}.png`;
-      await writeFile(join(generatedRoot, fileName), await sharp(Buffer.from(rendered.svg)).flatten({ background: "#ffffff" }).png().toBuffer());
-      db.prepare("UPDATE letters SET image_path=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(fileName, letter.id);
+      if (!letter.recipient_id) return problem(response, 409, "RECIPIENT_REQUIRED", "Choose a recipient before rendering.", requestId);
+      const rendered = await renderLetterImage(letter);
       return json(response, 200, { imageUrl: `/api/v1/letters/${encodeURIComponent(letter.id)}/image`, width: rendered.width, height: rendered.height });
     }
     const imageMatch = path.match(/^\/letters\/([^/]+)\/image$/);
@@ -290,6 +337,7 @@ export async function handleApiRequest(request, response, requestId) {
     if (method === "POST" && sendMatch) {
       const letter = db.prepare("SELECT * FROM letters WHERE id=? AND sender_id=? AND status='draft'").get(sendMatch[1], user.id);
       if (!letter) return problem(response, 404, "NOT_FOUND", "Draft letter not found.", requestId);
+      if (!letter.recipient_id) return problem(response, 409, "RECIPIENT_REQUIRED", "Choose a recipient before sending.", requestId);
       if (!letter.image_path) return problem(response, 409, "RENDER_REQUIRED", "Render the letter before sending.", requestId);
       const printJobId = `print-${randomUUID()}`;
       db.exec("BEGIN IMMEDIATE");
