@@ -1,4 +1,8 @@
 ﻿import { api, ApiProblem } from "./services/api-client.js";
+import {
+  createBrowserSpeechRecognition,
+  getSpeechRecognitionConstructor
+} from "./services/browser-speech-recognition.js";
 import { DeviceBus } from "./services/device-bus.js";
 import { createCompanionStore, createPrintJob } from "./services/companion-store.js";
 
@@ -6,6 +10,7 @@ const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 const bus = new DeviceBus("ai-hub-web");
 const companionStore = createCompanionStore();
+let activeVoiceRecognition = null;
 
 const DEFAULT_TURTLE_GAME = {
   id: "turtle-morning-printer",
@@ -1549,45 +1554,48 @@ async function processVoiceCommand(transcript) {
 }
 
 function startVoiceRecognition() {
-  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (activeVoiceRecognition?.active) {
+    activeVoiceRecognition.stop();
+    return;
+  }
+  const Recognition = getSpeechRecognitionConstructor(window);
   if (!Recognition) {
     toast("当前浏览器不支持语音识别，请在输入框中输入指令", "error");
     document.querySelector('#voice-command-form input[name="transcript"]')?.focus();
     return;
   }
-  const recognition = new Recognition();
-  recognition.lang = "zh-CN";
-  recognition.interimResults = true;
-  recognition.continuous = false;
-  let finalText = "";
   ui.voiceListening = true;
   document.querySelector(".voice-agent-card")?.classList.add("listening");
   document.querySelector(".voice-agent-status h2")?.replaceChildren("聆听中");
   companionStore.dispatch({ type: "device.transition", event: "listen" });
-  recognition.addEventListener("result", (event) => {
-    let interim = "";
-    for (let index = event.resultIndex; index < event.results.length; index += 1) {
-      const part = event.results[index][0]?.transcript ?? "";
-      if (event.results[index].isFinal) finalText += part;
-      else interim += part;
+  activeVoiceRecognition = createBrowserSpeechRecognition({
+    Recognition,
+    language: "zh-CN",
+    silenceWindowMs: 4_000,
+    maxCharacters: 1_500,
+    onTranscript: (transcript) => {
+      const input = document.querySelector('#voice-command-form input[name="transcript"]');
+      if (input) input.value = transcript;
+    },
+    onFinal: (transcript) => {
+      activeVoiceRecognition = null;
+      ui.voiceListening = false;
+      companionStore.dispatch({ type: "device.transition", event: "complete" });
+      if (transcript) processVoiceCommand(transcript);
+      else render();
+    },
+    onError: (code) => {
+      activeVoiceRecognition = null;
+      ui.voiceListening = false;
+      companionStore.dispatch({ type: "device.transition", event: "complete" });
+      const message = code === "not-allowed"
+        ? "麦克风权限被拒绝。请在浏览器地址栏允许麦克风，或使用文字输入。"
+        : "这次没有听清，请重新说一次。";
+      toast(message, "error");
+      render();
     }
-    const input = document.querySelector('#voice-command-form input[name="transcript"]');
-    if (input) input.value = `${finalText}${interim}`.slice(0, 1_500);
   });
-  recognition.addEventListener("error", (event) => {
-    ui.voiceListening = false;
-    companionStore.dispatch({ type: "device.transition", event: "complete" });
-    toast(event.error === "not-allowed" ? "请允许浏览器使用麦克风" : "没有听清，请再试一次", "error");
-    render();
-  });
-  recognition.addEventListener("end", () => {
-    ui.voiceListening = false;
-    companionStore.dispatch({ type: "device.transition", event: "complete" });
-    const transcript = finalText.trim();
-    if (transcript) processVoiceCommand(transcript);
-    else render();
-  });
-  recognition.start();
+  activeVoiceRecognition.start();
 }
 
 async function submitTutor(question) {

@@ -57,3 +57,29 @@ npm run dev
 网页端语音只使用浏览器内置 Web Speech API；硬件侧只接收后端转发的打印任务。
 拍照动作由硬件端自己完成，完成后将 JPEG/PNG 以 multipart `image` 字段上传到
 `POST /api/v1/photos/hardware`，应用端只负责相册展示、热敏像素化和 Letter 附图打印。
+
+## 浏览器语音转文字
+
+浏览器语音入口使用标准或 Chromium 前缀的 Web Speech API：
+
+```js
+window.SpeechRecognition || window.webkitSpeechRecognition
+```
+
+实现位于：
+
+- `services/browser-speech-recognition.js`：识别生命周期、连续聆听、静音检测和错误处理；
+- `app.js` 的 `startVoiceRecognition()`：更新输入框并把最终文字交给现有语音指令流程；
+- `tests/browser-speech-recognition.test.mjs`：标准/前缀 API、静音提交、自动续听和权限错误测试。
+
+行为约定：
+
+- 实时显示临时和最终识别文本；
+- 最后一次识别结果后静音 4 秒自动提交；
+- 浏览器提前结束识别时自动续听；
+- 再次点击麦克风按钮可以手动结束；
+- 每次最多提交 1,500 个字符；
+- 不支持 Web Speech API 或麦克风权限被拒绝时保留文字输入。
+
+本地 `localhost` 可以使用麦克风；非本地部署必须通过 HTTPS 才能稳定申请浏览器
+麦克风权限。浏览器语音输入与 ESP32 TCP PCM 输入是两条不同链路。
