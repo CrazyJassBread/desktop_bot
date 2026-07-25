@@ -148,6 +148,21 @@ class PrinterConfig:
 
 
 @dataclass
+class LetterConfig:
+    enabled: bool = True
+    auto_print: bool = True
+    output_dir: str = "generated_letters"
+    font_path: str = ""
+    stamp_selection: str = "random"
+    stamp_themes: list[str] = field(
+        default_factory=lambda: ["flower", "moon", "envelope"]
+    )
+    postmark_style: str = "wave_date"
+    show_signature: bool = True
+    max_print_characters: int = 2_000
+
+
+@dataclass
 class LLMSessionConfig:
     idle_timeout_seconds: float = 120.0
     max_duration_seconds: float = 900.0
@@ -244,6 +259,7 @@ class AppConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     application: ApplicationConfig = field(default_factory=ApplicationConfig)
     printer: PrinterConfig = field(default_factory=PrinterConfig)
+    letter: LetterConfig = field(default_factory=LetterConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     api: APIConfig = field(default_factory=APIConfig)
 
@@ -258,6 +274,7 @@ _SECTIONS: dict[str, type[Any]] = {
     "vision": VisionConfig,
     "application": ApplicationConfig,
     "printer": PrinterConfig,
+    "letter": LetterConfig,
     "api": APIConfig,
 }
 
@@ -611,6 +628,43 @@ def _validate(config: AppConfig) -> None:
     ):
         if not isinstance(value, bool):
             raise ConfigurationError(f"{name} must be a boolean")
+    for name, value in (
+        ("letter.enabled", config.letter.enabled),
+        ("letter.auto_print", config.letter.auto_print),
+        ("letter.show_signature", config.letter.show_signature),
+    ):
+        if not isinstance(value, bool):
+            raise ConfigurationError(f"{name} must be a boolean")
+    if not isinstance(config.letter.output_dir, str) or not (
+        config.letter.output_dir.strip()
+    ):
+        raise ConfigurationError("letter.output_dir cannot be empty")
+    if not isinstance(config.letter.font_path, str):
+        raise ConfigurationError("letter.font_path must be a string")
+    if config.letter.stamp_selection not in {"fixed", "random"}:
+        raise ConfigurationError(
+            "letter.stamp_selection must be 'fixed' or 'random'"
+        )
+    available_stamps = {"flower", "moon", "envelope"}
+    if (
+        not isinstance(config.letter.stamp_themes, list)
+        or not config.letter.stamp_themes
+        or not all(
+            isinstance(item, str) and item in available_stamps
+            for item in config.letter.stamp_themes
+        )
+    ):
+        raise ConfigurationError(
+            "letter.stamp_themes must contain supported stamp names"
+        )
+    if config.letter.postmark_style not in {"wave_date", "none"}:
+        raise ConfigurationError(
+            "letter.postmark_style must be 'wave_date' or 'none'"
+        )
+    _positive_int(
+        config.letter.max_print_characters,
+        "letter.max_print_characters",
+    )
     _validate_llm(config.llm)
     if isinstance(config.api.port, bool) or not isinstance(config.api.port, int):
         raise ConfigurationError("api.port must be an integer")

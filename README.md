@@ -1,6 +1,6 @@
-# AI Bot
+# Desktop Bot
 
-AI Bot 是一个面向桌面机器人硬件的持续感知与交互服务。它接收麦克风音频和
+Desktop Bot 是一个面向桌面机器人硬件的持续感知与交互服务。它接收麦克风音频和
 摄像头图像，完成语音活动检测、语音识别、关键词/会话路由、手势识别、LLM
 问答与写信，并通过 HTTP/WebSocket API 向其他程序发布结构化事件。
 
@@ -9,6 +9,8 @@ AI Bot 是一个面向桌面机器人硬件的持续感知与交互服务。它�
 - 音频：接收 Bot 的 TCP PCM，或在 `mic-test` 模式下使用电脑麦克风。
 - 语音处理：Silero VAD 断句，Faster Whisper 中文 ASR。
 - LLM：支持 OpenAI-compatible API、智能问答和写信会话。
+- 信件：LLM 完成写信后生成 Slowly 风格的黑白信笺，添加收件人、
+  像素邮票、日期邮戳和用户署名，并自动使用热敏打印机输出。
 - 视觉：接收 Bot 上传的 JPEG，使用 MediaPipe 识别稳定手势。
 - 照片：语音或 `Victory` 手势触发延迟拍照、图像处理和热敏打印。
 - API：提供健康状态、应用状态、事件历史、WebSocket 事件流和照片访问。
@@ -68,6 +70,7 @@ models/gesture_recognizer.task
 - `keywords`：唤醒词、聊天、拍照和自定义命令；
 - `llm`：LLM 开关、会话限制和语音控制短语；
 - `application`、`printer`：照片处理和打印；
+- `letter`：信件预览、字体、像素邮票、邮戳和自动打印；
 - `api`：HTTP/WebSocket 服务。
 
 ### 配置 LLM
@@ -177,6 +180,18 @@ LLM 问答流程：
 你：小A，完成写信
 ```
 
+写信完成后，系统会自动：
+
+1. 将 LLM 正文排版成 384 点宽的黑白信笺；
+2. 在左上角显示收件人，在右上角添加随机像素邮票和日期邮戳；
+3. 在正文末尾显示 `llm.user_nickname` 作为署名；
+4. 将 PNG 预览保存到 `generated_letters/`；
+5. 使用独立的清晰文字打印通道发送到热敏打印机。
+
+可在 `config/app.yaml` 的 `letter` 部分关闭自动打印、固定邮票主题、
+隐藏署名或设置 Linux 上的中文字体路径。信件打印不会使用照片的像素化和
+抖动参数。
+
 取消写信：
 
 ```text
@@ -228,6 +243,7 @@ GET  /api/events?after_sequence=0
 WS   /api/events
 POST /api/results
 GET  /api/photos/{capture_id}.jpg
+GET  /api/letters/{letter_id}.png
 ```
 
 WebSocket 和事件历史返回统一的 `PerceptionEvent`，包含 `event_id`、

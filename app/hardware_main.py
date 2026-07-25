@@ -23,6 +23,8 @@ from app.factories import (
     setup_logging,
 )
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
+from app.features.letter_print import LetterPrintManager
+from app.features.letter_rendering import LetterRenderer
 from app.features.thermal_printer import ThermalPrinterClient
 from app.llm.client import OpenAICompatibleClient
 from app.llm.mode_detector import LLMModeDetector
@@ -155,8 +157,24 @@ def build_daemon(
     event_bus = EventBus(config.perception.event_cache_capacity)
     latest_frame_store = LatestFrameStore()
     photo_manager = None
+    letter_manager = None
     llm_detector = None
     llm_session_manager = None
+    printer = None
+
+    if config.printer.enabled:
+        printer = ThermalPrinterClient(
+            config.printer.base_url,
+            width=config.printer.width,
+            max_chunk_height=config.printer.max_chunk_height,
+            pixel_size=config.printer.pixel_size,
+            contrast=config.printer.contrast,
+            brightness=config.printer.brightness,
+            grayscale_levels=config.printer.grayscale_levels,
+            dither=config.printer.dither,
+            rotate_180=config.printer.rotate_180,
+            timeout_seconds=config.printer.timeout_seconds,
+        )
 
     if audio_enabled:
         if not config.vad.enabled:
@@ -192,6 +210,17 @@ def build_daemon(
                 OpenAICompatibleClient.from_config(config.llm),
                 logger=setup_llm_logging(config.llm.log_path),
             )
+            if config.letter.enabled:
+                letter_manager = LetterPrintManager(
+                    config.letter,
+                    LetterRenderer(
+                        config.letter,
+                        width=config.printer.width,
+                        max_chunk_height=config.printer.max_chunk_height,
+                    ),
+                    signature=config.llm.user_nickname,
+                    printer=printer,
+                )
         audio_processor = KeywordASRProcessor(
             build_asr(config),
             KeywordDetector(config.keywords),
@@ -223,20 +252,6 @@ def build_daemon(
             gesture_backend,
         )
         if config.application.photo_enabled:
-            printer = None
-            if config.printer.enabled:
-                printer = ThermalPrinterClient(
-                    config.printer.base_url,
-                    width=config.printer.width,
-                    max_chunk_height=config.printer.max_chunk_height,
-                    pixel_size=config.printer.pixel_size,
-                    contrast=config.printer.contrast,
-                    brightness=config.printer.brightness,
-                    grayscale_levels=config.printer.grayscale_levels,
-                    dither=config.printer.dither,
-                    rotate_180=config.printer.rotate_180,
-                    timeout_seconds=config.printer.timeout_seconds,
-                )
             photo_manager = PhotoCaptureManager(
                 latest_frame_store,
                 delay_seconds=config.application.photo_delay_seconds,
@@ -256,6 +271,7 @@ def build_daemon(
         default_language=config.application.default_language,
         photo_manager=photo_manager,
         llm_session_manager=llm_session_manager,
+        letter_manager=letter_manager,
         llm_unavailable_reason=config.llm.unavailable_reason,
     )
 
@@ -299,6 +315,7 @@ async def run(args: argparse.Namespace) -> None:
                 health=daemon.health,
                 emit=daemon.emit,
                 photo_output_dir=Path(config.application.photo_output_dir),
+                letter_output_dir=Path(config.letter.output_dir),
             )
             await api_server.start()
         LOGGER.info(

@@ -19,6 +19,9 @@ def test_config_defaults():
     assert config.printer.base_url == "http://10.76.7.129"
     assert config.printer.width == 384
     assert config.printer.cooldown_seconds == 2
+    assert config.letter.enabled is True
+    assert config.letter.stamp_themes == ["flower", "moon", "envelope"]
+    assert config.letter.show_signature is True
     assert config.llm.enabled is False
     assert config.llm.session.idle_timeout_seconds == 120
     assert config.llm.modes.letter.finish_phrases == [
@@ -85,6 +88,26 @@ def test_config_rejects_conflicting_hardware_ports(tmp_path):
     ],
 )
 def test_config_rejects_invalid_printer_settings(tmp_path, body):
+    path = tmp_path / "app.yaml"
+    path.write_text(body, encoding="utf-8")
+
+    with pytest.raises(ConfigurationError):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "letter:\n  enabled: yes-please\n",
+        "letter:\n  output_dir: ''\n",
+        "letter:\n  stamp_selection: sequential\n",
+        "letter:\n  stamp_themes: []\n",
+        "letter:\n  stamp_themes: [unknown]\n",
+        "letter:\n  postmark_style: circular\n",
+        "letter:\n  max_print_characters: 0\n",
+    ],
+)
+def test_config_rejects_invalid_letter_settings(tmp_path, body):
     path = tmp_path / "app.yaml"
     path.write_text(body, encoding="utf-8")
 

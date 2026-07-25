@@ -95,7 +95,7 @@ application:
 
 printer:
   enabled: true
-  base_url: http://10.76.7.129
+  base_url: http://10.76.11.223
   width: 384
   max_chunk_height: 1200
   pixel_size: 6
@@ -106,6 +106,23 @@ printer:
   rotate_180: false
   timeout_seconds: 30
   cooldown_seconds: 2.0
+
+# Slowly-inspired monochrome letter layout. Completed LLM letters are rendered
+# to a PNG preview and sent through the crisp text-printing path.
+letter:
+  enabled: true
+  auto_print: true
+  output_dir: generated_letters
+  # Leave empty to discover Songti/Noto CJK. Set explicitly on Linux if needed.
+  font_path: ""
+  stamp_selection: random
+  stamp_themes:
+    - flower
+    - moon
+    - envelope
+  postmark_style: wave_date
+  show_signature: true
+  max_print_characters: 2000
 
 llm:
   enabled: true
@@ -134,9 +151,13 @@ llm:
       recipient_prefixes:
         - 收件人是
         - 写给
+        - 收信人是
       finish_phrases:
         - 小A，完成写信
         - 小A，信写完了
+        - 完成写信
+        - 信写完了
+        - 写信完成
       cancel_phrases:
         - 小A，取消写信
         - 小A，放弃这封信

@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 from dataclasses import dataclass
 from io import BytesIO
+from threading import Lock
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -156,8 +157,13 @@ class ThermalPrinterClient:
         self.dither = dither
         self.rotate_180 = rotate_180
         self.timeout_seconds = timeout_seconds
+        self._print_lock = Lock()
 
     def print_image(self, image_bytes: bytes) -> PrintResult:
+        with self._print_lock:
+            return self._print_image_locked(image_bytes)
+
+    def _print_image_locked(self, image_bytes: bytes) -> PrintResult:
         try:
             image = convert_to_printer_image(
                 image_bytes,
@@ -172,6 +178,24 @@ class ThermalPrinterClient:
         except (OSError, UnidentifiedImageError, ValueError) as exc:
             raise PrinterError("invalid_image") from exc
 
+        return self._print_ready_image(image)
+
+    def print_prepared_image(self, image: Image.Image) -> PrintResult:
+        """Print a crisp, already laid-out monochrome image without resizing."""
+        with self._print_lock:
+            if image.width != self.width or image.height <= 0:
+                raise PrinterError("invalid_image")
+            try:
+                prepared = image.copy()
+                if prepared.mode != "1":
+                    prepared = prepared.convert("1", dither=Image.Dither.NONE)
+                if self.rotate_180:
+                    prepared = prepared.rotate(180, expand=False)
+            except (OSError, ValueError) as exc:
+                raise PrinterError("invalid_image") from exc
+            return self._print_ready_image(prepared)
+
+    def _print_ready_image(self, image: Image.Image) -> PrintResult:
         chunks = split_image(image, self.max_chunk_height)
         for chunk in chunks:
             self._post_chunk(chunk)

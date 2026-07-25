@@ -10,6 +10,7 @@ logs/*
 models/*
 !models/.gitkeep
 captured_photos/
+generated_letters/
 output/
 records/
 received_images/

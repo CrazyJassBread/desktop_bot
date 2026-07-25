@@ -112,6 +112,23 @@ class RecordingLLMSessionManager:
         self.closed = True
 
 
+class RecordingLetterManager:
+    def __init__(self) -> None:
+        self.events: list[PerceptionEvent] = []
+        self.emitter = None
+        self.closed = False
+
+    def set_event_emitter(self, emitter) -> None:
+        self.emitter = emitter
+
+    def schedule(self, event: PerceptionEvent) -> bool:
+        self.events.append(event)
+        return True
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
 def jpeg_bytes() -> bytes:
     image = Image.new("RGB", (640, 480), color=(10, 20, 30))
     output = BytesIO()
@@ -355,6 +372,40 @@ async def test_controller_delegates_llm_and_suppresses_only_audio_intents():
     ]
     await controller.aclose()
     assert llm_manager.closed is True
+
+
+@pytest.mark.asyncio
+async def test_controller_schedules_completed_llm_letter_for_printing():
+    class CompletingLLMManager(RecordingLLMSessionManager):
+        async def handle(self, event):
+            self.calls.append(event)
+            return (
+                PerceptionEvent(
+                    "llm.letter_completed",
+                    "llm",
+                    payload={"recipient": "小明", "content": "正文"},
+                ),
+            )
+
+    llm_manager = CompletingLLMManager()
+    letter_manager = RecordingLetterManager()
+    controller = ApplicationController(
+        llm_session_manager=llm_manager,
+        letter_manager=letter_manager,
+    )
+
+    completed = await controller.handle(
+        PerceptionEvent(
+            "speech.transcribed",
+            "audio",
+            payload={"transcript": "小A，完成写信"},
+        )
+    )
+
+    assert completed[0].event_type == "llm.letter_completed"
+    assert letter_manager.events == [completed[0]]
+    await controller.aclose()
+    assert letter_manager.closed is True
 
 
 @pytest.mark.asyncio

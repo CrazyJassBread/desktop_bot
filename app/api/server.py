@@ -27,6 +27,7 @@ class EventAPIServer:
         health: Callable[[], dict[str, object]],
         emit: Callable[[PerceptionEvent], Awaitable[None]],
         photo_output_dir: Path,
+        letter_output_dir: Path,
     ) -> None:
         self.host = host
         self.port = port
@@ -37,6 +38,7 @@ class EventAPIServer:
         self.health = health
         self.emit = emit
         self.photo_output_dir = photo_output_dir
+        self.letter_output_dir = letter_output_dir
         self._runner = None
 
     async def start(self) -> None:
@@ -53,6 +55,7 @@ class EventAPIServer:
         app.router.add_post("/api/results", self._result)
         app.router.add_get(self.websocket_path, self._events)
         app.router.add_get("/api/photos/{capture_id}.jpg", self._photo)
+        app.router.add_get("/api/letters/{capture_id}.png", self._letter)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
@@ -164,6 +167,17 @@ class EventAPIServer:
         if not _CAPTURE_ID.fullmatch(capture_id):
             raise web.HTTPNotFound()
         path = self.photo_output_dir / f"{capture_id}.jpg"
+        if not path.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(path)
+
+    async def _letter(self, request):
+        from aiohttp import web
+
+        capture_id = request.match_info["capture_id"]
+        if not _CAPTURE_ID.fullmatch(capture_id):
+            raise web.HTTPNotFound()
+        path = self.letter_output_dir / f"{capture_id}.png"
         if not path.is_file():
             raise web.HTTPNotFound()
         return web.FileResponse(path)

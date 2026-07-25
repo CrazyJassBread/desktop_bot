@@ -29,11 +29,13 @@ class ApplicationController:
         default_language: str = "zh",
         photo_manager: object | None = None,
         llm_session_manager: object | None = None,
+        letter_manager: object | None = None,
         llm_unavailable_reason: str | None = None,
     ) -> None:
         self.state = AppState(language=default_language)
         self.photo_manager = photo_manager
         self.llm_session_manager = llm_session_manager
+        self.letter_manager = letter_manager
         self.llm_unavailable_reason = llm_unavailable_reason
         self._emit: EventEmitter | None = None
 
@@ -48,6 +50,9 @@ class ApplicationController:
                 "set_event_emitter",
             )
             set_emitter(emitter)
+        if self.letter_manager is not None:
+            set_emitter = getattr(self.letter_manager, "set_event_emitter")
+            set_emitter(emitter)
 
     async def handle(
         self,
@@ -55,10 +60,12 @@ class ApplicationController:
     ) -> tuple[PerceptionEvent, ...]:
         if event.event_type in {"llm.letter.start", "llm.qa.start"}:
             if self.llm_session_manager is not None:
-                return await getattr(
+                events = await getattr(
                     self.llm_session_manager,
                     "handle",
                 )(event)
+                self._schedule_completed_letters(events)
+                return events
             if self.llm_unavailable_reason is not None:
                 mode = (
                     "letter"
@@ -77,10 +84,12 @@ class ApplicationController:
                 )
         if self.llm_session_manager is not None:
             if event.event_type == "speech.transcribed":
-                return await getattr(
+                events = await getattr(
                     self.llm_session_manager,
                     "handle",
                 )(event)
+                self._schedule_completed_letters(events)
+                return events
             if (
                 getattr(self.llm_session_manager, "active")
                 and event.source == "audio"
@@ -132,6 +141,17 @@ class ApplicationController:
                 )
             return ()
         return ()
+
+    def _schedule_completed_letters(
+        self,
+        events: tuple[PerceptionEvent, ...],
+    ) -> None:
+        if self.letter_manager is None:
+            return
+        schedule = getattr(self.letter_manager, "schedule")
+        for item in events:
+            if item.event_type == "llm.letter_completed":
+                schedule(item)
 
     def _start_photo_print(
         self,
@@ -284,3 +304,5 @@ class ApplicationController:
             await getattr(self.photo_manager, "aclose")()
         if self.llm_session_manager is not None:
             await getattr(self.llm_session_manager, "aclose")()
+        if self.letter_manager is not None:
+            await getattr(self.letter_manager, "aclose")()

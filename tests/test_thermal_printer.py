@@ -130,3 +130,30 @@ def test_client_maps_non_success_response_to_printer_error(recording_server):
         client.print_image(encoded_image())
 
     assert captured.value.reason == "http_error"
+
+
+def test_client_prints_prepared_letter_without_resizing(monkeypatch):
+    client = ThermalPrinterClient(
+        "http://printer.test",
+        width=16,
+        max_chunk_height=3,
+        rotate_180=False,
+    )
+    posted: list[Image.Image] = []
+    monkeypatch.setattr(
+        client,
+        "_post_chunk",
+        lambda chunk: posted.append(chunk.copy()),
+    )
+    prepared = Image.new("1", (16, 7), 255)
+    prepared.putpixel((3, 2), 0)
+
+    result = client.print_prepared_image(prepared)
+
+    assert result == type(result)(width=16, height=7, chunk_count=3)
+    assert [chunk.size for chunk in posted] == [
+        (16, 3),
+        (16, 3),
+        (16, 1),
+    ]
+    assert posted[0].getpixel((3, 2)) == 0
