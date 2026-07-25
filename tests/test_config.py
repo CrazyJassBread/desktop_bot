@@ -9,8 +9,8 @@ from app.hardware_main import build_parser, validate_mode_arguments
 def test_config_defaults():
     config = load_config()
     assert config.audio.target_sample_rate == 16_000
-    assert config.hardware.audio_port == 8080
-    assert config.hardware.vision_port == 8081
+    assert config.hardware.audio_port == 8081
+    assert config.hardware.vision_port == 8082
     assert config.keywords.wake
     assert config.keywords.photo_print
     assert config.perception.vision_max_fps == 5
@@ -65,7 +65,7 @@ def test_config_rejects_unknown_option(tmp_path):
 def test_config_rejects_conflicting_hardware_ports(tmp_path):
     path = tmp_path / "app.yaml"
     path.write_text(
-        "hardware:\n  audio_port: 8080\n  vision_port: 8080\n",
+        "hardware:\n  audio_port: 8081\n  vision_port: 8081\n",
         encoding="utf-8",
     )
     with pytest.raises(ConfigurationError):

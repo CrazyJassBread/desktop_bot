@@ -23,7 +23,7 @@ class TCPPCMAudioSource(AudioFrameSource):
     def __init__(
         self,
         host: str = "0.0.0.0",
-        port: int = 8080,  # NOTE: Audio 的接收端口
+        port: int = 8081,  # NOTE: Audio 的接收端口
         *,
         sample_rate: int = 16_000,
         frame_samples: int = 512,
@@ -43,6 +43,14 @@ class TCPPCMAudioSource(AudioFrameSource):
         self._server: asyncio.Server | None = None
         self._started = asyncio.Event()
         self._active_writer: asyncio.StreamWriter | None = None
+        self._active_peer: object | None = None
+        self._connected_at: float | None = None
+        self._last_frame_at: float | None = None
+        self._frames_received = 0
+        self._connections_accepted = 0
+        self._connections_replaced = 0
+        self._last_rms = 0.0
+        self._last_peak = 0.0
 
     async def wait_started(self) -> None:
         await self._started.wait()
@@ -77,12 +85,20 @@ class TCPPCMAudioSource(AudioFrameSource):
         writer: asyncio.StreamWriter,
     ) -> None:
         peer = writer.get_extra_info("peername")
-        if self._active_writer is not None:
-            LOGGER.warning("rejecting second audio client from %s", peer)
-            writer.close()
-            await writer.wait_closed()
-            return
+        previous_writer = self._active_writer
+        previous_peer = self._active_peer
         self._active_writer = writer
+        self._active_peer = peer
+        self._connected_at = time.time()
+        self._connections_accepted += 1
+        if previous_writer is not None and previous_writer is not writer:
+            self._connections_replaced += 1
+            LOGGER.warning(
+                "replacing stale audio client %s with latest connection %s",
+                previous_peer,
+                peer,
+            )
+            previous_writer.close()
         LOGGER.info("audio Bot connected from %s", peer)
         frame_bytes = self.frame_samples * 2
         buffered = bytearray()
@@ -90,6 +106,8 @@ class TCPPCMAudioSource(AudioFrameSource):
             while True:
                 data = await reader.read(4096)
                 if not data:
+                    break
+                if self._active_writer is not writer:
                     break
                 buffered.extend(data)
                 while len(buffered) >= frame_bytes:
@@ -99,6 +117,10 @@ class TCPPCMAudioSource(AudioFrameSource):
                     frame = np.ascontiguousarray(
                         pcm.astype(np.float32) / 32768.0
                     )
+                    self._frames_received += 1
+                    self._last_frame_at = time.time()
+                    self._last_rms = float(np.sqrt(np.mean(np.square(frame))))
+                    self._last_peak = float(np.max(np.abs(frame)))
                     assert self._queue is not None
                     await self._queue.put(frame)
         except (ConnectionError, asyncio.CancelledError):
@@ -108,14 +130,53 @@ class TCPPCMAudioSource(AudioFrameSource):
         finally:
             if self._active_writer is writer:
                 self._active_writer = None
+                self._active_peer = None
+                self._connected_at = None
             writer.close()
             with suppress(Exception):
                 await writer.wait_closed()
             LOGGER.info("audio Bot disconnected from %s", peer)
 
+    def diagnostics(self) -> dict[str, object]:
+        """Return privacy-safe live connection and signal telemetry."""
+
+        now = time.time()
+        peer = self._active_peer
+        peer_host = None
+        peer_port = None
+        if isinstance(peer, tuple) and peer:
+            peer_host = str(peer[0])
+            if len(peer) > 1:
+                peer_port = int(peer[1])
+        return {
+            "connected": self._active_writer is not None,
+            "peer_host": peer_host,
+            "peer_port": peer_port,
+            "connected_seconds": (
+                round(now - self._connected_at, 3)
+                if self._connected_at is not None
+                else None
+            ),
+            "last_frame_age_ms": (
+                round((now - self._last_frame_at) * 1_000)
+                if self._last_frame_at is not None
+                else None
+            ),
+            "frames_received": self._frames_received,
+            "connections_accepted": self._connections_accepted,
+            "connections_replaced": self._connections_replaced,
+            "rms": round(self._last_rms, 6),
+            "peak": round(self._last_peak, 6),
+            "sample_rate": self.sample_rate,
+            "frame_samples": self.frame_samples,
+            "format": "PCM s16le / mono",
+        }
+
     async def aclose(self) -> None:
         writer = self._active_writer
         self._active_writer = None
+        self._active_peer = None
+        self._connected_at = None
         if writer is not None:
             writer.close()
             with suppress(Exception):
@@ -133,7 +194,7 @@ class HTTPJPEGImageSource(ImageFrameSource):
     def __init__(
         self,
         host: str = "0.0.0.0",
-        port: int = 8081, #NOTE Image 的接收端口
+        port: int = 8082, #NOTE Image 的接收端口
         *,
         upload_path: str = "/upload",
         max_image_bytes: int = 2_097_152,

@@ -12,6 +12,12 @@ models/*
 captured_photos/
 generated_letters/
 output/
+dist/
+.env.local
+integrations/**/node_modules/
+integrations/**/.env
+integrations/**/.env.local
+api.txt
 records/
 received_images/
 microphone.wav

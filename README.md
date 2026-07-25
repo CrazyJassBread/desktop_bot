@@ -146,8 +146,8 @@ python -m app --vision-only
 
 ```bash
 python -m app \
-  --audio-host 0.0.0.0 --audio-port 8080 \
-  --vision-host 0.0.0.0 --vision-port 8081
+  --audio-host 0.0.0.0 --audio-port 8081 \
+  --vision-host 0.0.0.0 --vision-port 8082
 ```
 
 ### 使用电脑麦克风测试 LLM
@@ -241,16 +241,17 @@ LLM 会话控制短语要求单独说出。若 ASR 把多句话合并为一个�
 
 音频：
 
-- TCP `0.0.0.0:8080`
+- TCP `0.0.0.0:8081`
 - 16 kHz、单声道、signed 16-bit little-endian PCM
 - 每个 VAD 帧 512 samples
 
 图像：
 
-- HTTP `POST http://0.0.0.0:8081/upload`
+- HTTP `POST http://0.0.0.0:8082/upload`
 - `Content-Type: image/jpeg`
 - 默认尺寸 640 × 480
 - 默认最大 2 MiB
+- 接收端只保留最新一张待处理图片
 
 固件输入可以分别用以下诊断工具验证：
 
@@ -258,6 +259,37 @@ LLM 会话控制短语要求单独说出。若 ASR 把多句话合并为一个�
 python -m scripts.receive_microphone
 python -m scripts.receive_images
 ```
+
+## Web MVP
+
+网页端位于 `integrations/ai-hub-os-web`，要求 Node.js 22 或更高版本。它提供
+浏览器语音、AI Letter、社区与匹配、照片相册、设备状态和热敏打印接口。
+
+```bash
+cd integrations/ai-hub-os-web
+cp .env.example .env.local
+npm install
+npm run dev
+```
+
+默认页面地址为 `http://127.0.0.1:18000`，主要入口包括：
+
+- `/education`：浏览器麦克风、学习 AI 和可打印内容；
+- `/letter/create`：写信、附加照片、预览热敏模板并发送打印；
+- `/profile`：个人主页和硬件照片相册；
+- `/device`：设备状态、自动打印策略和打印队列；
+- `/simulator.html`：设备模拟器。
+
+网页端语音使用浏览器内置 Web Speech API。硬件完成拍照后，可将图片以
+multipart `image` 字段上传到 `POST /api/v1/photos/hardware`。完整接口和环境
+变量说明参见 `integrations/ai-hub-os-web/README.md`。
+
+当前端口分配：
+
+- `8081`：Bot 麦克风 TCP PCM；
+- `8082`：Bot 图像 HTTP 上传；
+- `8090`：Desktop Bot HTTP/WebSocket API；
+- `18000`：AI Hub OS Web。
 
 ## API
 

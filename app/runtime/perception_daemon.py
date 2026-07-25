@@ -202,10 +202,14 @@ class PerceptionDaemon:
         return event
 
     def health(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "running": self.running,
             "cached_events": len(self.cache),
             "event_subscribers": self.event_bus.subscriber_count,
             "utterance_queue_size": self._utterances.qsize(),
             "metrics": asdict(self.metrics),
         }
+        diagnostics = getattr(self.audio_source, "diagnostics", None)
+        if callable(diagnostics):
+            result["audio"] = diagnostics()
+        return result
