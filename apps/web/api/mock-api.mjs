@@ -2,6 +2,8 @@ import iconv from "iconv-lite";
 import { Readable } from "node:stream";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import {
+  plainThermalLetterPreviewDataUrl,
+  renderPlainThermalLetterBatches,
   renderThermalLetterBatches,
   thermalLetterPreviewDataUrl
 } from "../services/thermal-letter.mjs";
@@ -11,7 +13,10 @@ import {
   renderThermalContentBatches,
   thermalContentPreviewDataUrl
 } from "../services/thermal-content.mjs";
-import { processThermalImage } from "../services/thermal-image.mjs";
+import {
+  processThermalImage,
+  renderThermalImageBatches
+} from "../services/thermal-image.mjs";
 
 const me = {
   id: "usr-lin",
@@ -151,7 +156,7 @@ const matches = [
 const letters = [
   {
     id: "ltr-1", authorId: "usr-aiko", recipientId: "usr-lin", subject: "京都下雨了",
-    body: "林安：\n\n京都今天下了一场很轻的雨。我把新做的机器人放在窗边，它第一次正确识别出了雨天。想起你也在做一台桌面伙伴，所以写来问问：你的 MIMO 最近学会了什么？\n\nAiko",
+    body: "林安：\n\n京都今天下了一场很轻的雨。我把新做的机器人放在窗边，它第一次正确识别出了雨天。想起你也在做一台桌面伙伴，所以写来问问：你的小P最近学会了什么？\n\nAiko",
     status: "PRINTED", printStatus: "SUCCESS", createdAt: "2026-07-23T03:18:00.000Z", printedAt: "2026-07-23T03:22:00.000Z", unread: true, version: 6
   },
   {
@@ -166,13 +171,13 @@ const letters = [
   },
   {
     id: "ltr-4", authorId: "usr-lin", recipientId: "usr-aiko", subject: "夏夜与像素屏",
-    body: "Aiko：\n\n想和你分享 MIMO 新做好的像素表情。它会在打印时认真地眨眼，像是在读信。\n\n林安",
+    body: "Aiko：\n\n想和你分享小P新做好的像素表情。它会在打印时认真地眨眼，像是在读信。\n\n林安",
     status: "DRAFT", printStatus: null, createdAt: "2026-07-23T08:00:00.000Z", unread: false, version: 2
   }
 ];
 
 const device = {
-  id: "mimo-desk-01", userId: "usr-lin", displayName: "MIMO One", model: "DNESP32S3",
+  id: "mimo-desk-01", userId: "usr-lin", displayName: "小P", model: "DNESP32S3",
   status: "ONLINE", freshness: "LIVE", battery: 82, charging: true,
   firmwareVersion: "0.3.0-mvp", wifi: "Studio Wi-Fi", lastSeenAt: new Date().toISOString(),
   volume: 48, brightness: 70,
@@ -247,6 +252,9 @@ const voiceConversations = [];
 const voiceCommands = [];
 const voicePrintJobs = [];
 const voiceSettings = new Map();
+const voiceLetterSessions = new Map();
+const turtleSessions = new Map();
+const activeTurtleSessions = new Map();
 
 function normalizeEmail(value) {
   return String(value ?? "").trim().toLowerCase().normalize("NFKC");
@@ -461,8 +469,61 @@ function withUser(user) {
 function resolveVoiceLetterRecipient(value) {
   const target = String(value ?? "").trim().replace(/\s+/gu, "").toLocaleLowerCase();
   if (!target) return null;
-  return users.find((user) => [user.id, user.handle, user.displayName]
-    .some((candidate) => String(candidate ?? "").replace(/\s+/gu, "").toLocaleLowerCase() === target)) ?? null;
+  const direct = users.find((user) => [user.id, user.handle, user.displayName]
+    .some((candidate) => String(candidate ?? "").replace(/\s+/gu, "").toLocaleLowerCase() === target));
+  if (direct) return direct;
+  const aliases = [
+    [/妈妈|母亲|mama|mom/iu, "usr-mom"],
+    [/二次元|动漫|动画|插画|画画|illustration|anime/iu, "usr-mina"],
+    [/日本|京都|日语|japan|aiko/iu, "usr-aiko"],
+    [/硬件|esp32|机器人|开源|chen/iu, "usr-chen"],
+    [/英文|声音|音乐|芬兰|noah/iu, "usr-noah"]
+  ];
+  const matchedAlias = aliases.find(([pattern]) => pattern.test(String(value ?? "")));
+  if (matchedAlias) return users.find((user) => user.id === matchedAlias[1]) ?? null;
+  return users
+    .filter((user) => user.id !== me.id)
+    .map((user) => ({
+      user,
+      score: [...(user.interests ?? []), ...(user.skills ?? [])]
+        .reduce((score, label) => score + Number(target.includes(String(label).toLocaleLowerCase())), 0)
+    }))
+    .sort((a, b) => b.score - a.score)[0]?.score > 0
+    ? users
+      .filter((user) => user.id !== me.id)
+      .map((user) => ({
+        user,
+        score: [...(user.interests ?? []), ...(user.skills ?? [])]
+          .reduce((score, label) => score + Number(target.includes(String(label).toLocaleLowerCase())), 0)
+      }))
+      .sort((a, b) => b.score - a.score)[0].user
+    : null;
+}
+
+function enrichContactDecision(decision, viewerId) {
+  if (!["WRITE_LETTER", "LETTER_CONTENT", "LETTER_REVIEW", "LETTER_CONFIRM_SEND", "LETTER_SENT"].includes(decision.intent)) return decision;
+  const requested = decision.recipient ?? "";
+  const recipient = resolveVoiceLetterRecipient(requested);
+  if (!recipient || recipient.id === viewerId) return decision;
+  if (decision.intent === "WRITE_LETTER") {
+    const raw = String(requested || recipient.displayName);
+    const fuzzy = ![recipient.id, recipient.handle, recipient.displayName].some((value) => String(value).toLowerCase() === raw.toLowerCase());
+    return {
+      ...decision,
+      recipient: recipient.displayName,
+      recipientId: recipient.id,
+      matchedRecipient: withUser(recipient),
+      reply: fuzzy
+        ? `已经找到${recipient.displayName}，可以开始写信，请告诉我信件内容。`
+        : decision.reply
+    };
+  }
+  return {
+    ...decision,
+    recipient: recipient.displayName,
+    recipientId: recipient.id,
+    matchedRecipient: withUser(recipient)
+  };
 }
 
 function hydratePost(post) {
@@ -820,7 +881,7 @@ function executeDeviceDecision(decision, viewerDevice) {
 
 function printableForConversation(conversation, target = "full") {
   if (target === "user") return { kind: "chat", title: "我的话", content: conversation.userText };
-  if (target === "assistant") return { kind: "chat", title: "AI 回复", content: conversation.assistantText };
+  if (target === "assistant") return { kind: "chat", title: "小P 回复", content: conversation.assistantText };
   if (target === "result") return {
     kind: "note",
     title: "指令执行结果",
@@ -828,21 +889,284 @@ function printableForConversation(conversation, target = "full") {
   };
   return {
     kind: "chat",
-    title: "AI Hub 对话",
-    content: `我：${conversation.userText}\n\nAI：${conversation.assistantText}\n\n执行结果：${conversation.executionResult?.message ?? "无设备操作"}`
+    title: "PrintPal 对话",
+    content: `我：${conversation.userText}\n\n小P：${conversation.assistantText}\n\n执行结果：${conversation.executionResult?.message ?? "无设备操作"}`
   };
+}
+
+function cleanVoiceLetterText(value) {
+  return String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/(嗯|啊|呃|额|那个|就是|然后|怎么说呢|你知道吧)/gu, "")
+    .replace(/([，。！？,.!?])\1+/gu, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+    .slice(0, 1_500);
+}
+
+function splitLetterFinishText(value) {
+  const text = String(value ?? "").trim();
+  const match = text.match(/(?:\bover\b|发送信件|帮我整理一下|写好了|可以了|就这些|说完了|结束写信|结束)[\s，,。.!！?？;；]*$/iu);
+  if (!match) return { finished: false, content: text, keyword: null };
+  return {
+    finished: true,
+    content: text.slice(0, match.index).replace(/[\s，,。.!！?？;；]+$/u, "").trim(),
+    keyword: match[0].trim()
+  };
+}
+
+function isLetterConfirmation(value) {
+  return /^(确认发送|可以发|就这样发|发送吧|确认|发吧|可以发送|按这个版本发送|就这样)$/u.test(String(value ?? "").trim());
+}
+
+function isLetterCancel(value) {
+  return /^(取消|不要发了|退出写信|取消发送)$/u.test(String(value ?? "").trim());
+}
+
+function activeVoiceLetterSession(viewerId) {
+  const session = voiceLetterSessions.get(viewerId);
+  return session && !["SENT", "CANCELLED", "FAILED"].includes(session.status) ? session : null;
+}
+
+function publicVoiceLetterDraft(session) {
+  if (!session) return null;
+  return {
+    sessionId: session.id,
+    status: session.status,
+    recipient: session.recipientName ?? null,
+    recipientId: session.recipientId ?? null,
+    subject: session.subject,
+    body: session.polishedBody ?? "",
+    rawText: session.rawParts.join("\n").trim(),
+    sentLetterId: session.sentLetterId ?? null,
+    error: session.error ?? null
+  };
+}
+
+async function polishVoiceLetterDraft(session) {
+  const raw = cleanVoiceLetterText(session.rawParts.join("\n"));
+  if (!raw) return "";
+  let body = raw;
+  try {
+    const completion = await deepSeekChat({
+      json: true,
+      maxTokens: 1_000,
+      temperature: 0.35,
+      messages: [
+        { role: "system", content: "你是 PrintPal 的语音写信整理助手。输出 json，字段只能有 body。把口语转写整理成自然、真诚、接近用户本人语气的信件正文；删除嗯、啊、那个、就是、然后、重复和口误；补充标点和必要分段；必须保留原事实、态度、时间、地点、金额、姓名，不得编造信息，不要写成正式公文，不要添加用户没说过的祝福或经历。" },
+        { role: "user", content: `收件人：${session.recipientName ?? "未确认"}\n原始内容：${raw}` }
+      ]
+    });
+    body = cleanVoiceLetterText(completion.content?.body || raw);
+  } catch {
+    body = raw
+      .replace(/(.{22,42}?)([。！？.!?]|$)/gu, "$1$2\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  session.polishedBody = body.slice(0, 1_500);
+  return session.polishedBody;
+}
+
+function applyVoiceLetterEdit(session, text) {
+  const clean = String(text ?? "").trim();
+  const recipientChange = clean.match(/收件人(?:改成|换成|是)(.{1,32})$/u);
+  if (recipientChange) {
+    const recipient = resolveVoiceLetterRecipient(recipientChange[1]);
+    if (!recipient) return "我还没找到这个联系人，请再说一次明确的昵称。";
+    session.recipientId = recipient.id;
+    session.recipientName = recipient.displayName;
+    session.status = "WAITING_CONFIRMATION";
+    return `收件人已改成${recipient.displayName}。`;
+  }
+  const correction = clean.match(/不是(.{1,24})，?是(.{1,24})$/u);
+  if (correction && session.polishedBody) {
+    session.polishedBody = session.polishedBody.replaceAll(correction[1].trim(), correction[2].trim());
+    session.rawParts.push(`修正：${clean}`);
+    session.status = "WAITING_CONFIRMATION";
+    return "已经按你的修正更新了正文。";
+  }
+  const add = clean.match(/(?:加一句|补充一句|再加上)(.{1,160})$/u);
+  if (add) {
+    session.rawParts.push(add[1].trim());
+    session.polishedBody = `${session.polishedBody || ""}\n${cleanVoiceLetterText(add[1])}`.trim();
+    session.status = "WAITING_CONFIRMATION";
+    return "已经补充进草稿了。";
+  }
+  if (/把最后一句删掉|删除最后一句/u.test(clean) && session.polishedBody) {
+    const sentences = session.polishedBody.split(/(?<=[。！？.!?])\s*/u).filter(Boolean);
+    sentences.pop();
+    session.polishedBody = sentences.join("").trim();
+    session.status = "WAITING_CONFIRMATION";
+    return "已经删掉最后一句。";
+  }
+  if (/我再补充一点|继续补充/u.test(clean)) {
+    session.status = "COLLECTING_CONTENT";
+    return "好的，你继续说，我会接着记。";
+  }
+  return null;
+}
+
+async function sendVoiceLetterSession(session, viewerId) {
+  if (session.sentResult) return { ...session.sentResult, replayed: true };
+  const recipient = resolveVoiceLetterRecipient(session.recipientId ?? session.recipientName);
+  if (!recipient) throw new Error("收件人不明确，请先确认收件人。");
+  const body = String(session.polishedBody ?? "").trim();
+  if (!body) throw new Error("正文还是空的，请先说出信件内容。");
+  const now = new Date().toISOString();
+  const letter = {
+    id: `ltr-${crypto.randomUUID()}`,
+    authorId: viewerId,
+    recipientId: recipient.id,
+    subject: session.subject,
+    body,
+    status: "RECEIVED",
+    printStatus: "WAITING_DEVICE",
+    createdAt: now,
+    unread: false,
+    version: 2,
+    source: "voice",
+    voiceSessionId: session.id
+  };
+  const job = {
+    id: `pj-${crypto.randomUUID()}`,
+    userId: recipient.id,
+    letterId: letter.id,
+    deviceId: deviceForUser(recipient.id).id,
+    title: letter.subject,
+    status: "WAITING_DEVICE",
+    format: "thermal_58mm",
+    pageCount: 1,
+    createdAt: now,
+    finishedAt: null,
+    version: 1
+  };
+  letters.unshift(letter);
+  printJobs.unshift(job);
+  session.status = "SENT";
+  session.sentLetterId = letter.id;
+  session.sentResult = { letter, printJob: job, recipient: withUser(recipient) };
+  return session.sentResult;
+}
+
+async function handleVoiceLetterTurn(viewerId, transcript, initialDecision = null) {
+  let session = activeVoiceLetterSession(viewerId);
+  const text = String(transcript ?? "").trim();
+  if (!session && initialDecision?.intent === "WRITE_LETTER") {
+    session = {
+      id: `voice-letter-${crypto.randomUUID()}`,
+      userId: viewerId,
+      status: initialDecision.recipient ? "WAITING_CONTENT" : "WAITING_RECIPIENT",
+      recipientId: initialDecision.recipientId ?? null,
+      recipientName: initialDecision.recipient ?? null,
+      subject: "来自小P的一封信",
+      rawParts: [],
+      polishedBody: "",
+      sendKey: `voice-letter-send-${crypto.randomUUID()}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    if (initialDecision.rawContent) {
+      session.rawParts.push(initialDecision.rawContent);
+      session.status = "WAITING_CONFIRMATION";
+    }
+    voiceLetterSessions.set(viewerId, session);
+    if (!initialDecision.rawContent) {
+      if (!session.recipientId) {
+        return { intent: "WRITE_LETTER", reply: "这封信想发给谁？", mode: "letter_waiting_recipient", requiresConfirmation: false, letterDraft: publicVoiceLetterDraft(session) };
+      }
+      return { intent: "WRITE_LETTER", reply: `好的，你想对${session.recipientName}说些什么？`, mode: "letter_waiting_content", recipient: session.recipientName, recipientId: session.recipientId, requiresConfirmation: false, letterDraft: publicVoiceLetterDraft(session) };
+    }
+  }
+  if (!session) return null;
+  session.updatedAt = new Date().toISOString();
+
+  if (isLetterCancel(text)) {
+    session.status = "CANCELLED";
+    voiceLetterSessions.delete(viewerId);
+    return { intent: "LETTER_CANCELLED", reply: "好的，已经取消这封信。", mode: "default", requiresConfirmation: false, letterDraft: publicVoiceLetterDraft(session) };
+  }
+
+  if (session.status === "WAITING_RECIPIENT") {
+    const recipient = resolveVoiceLetterRecipient(text);
+    if (!recipient) {
+      return { intent: "WRITE_LETTER", reply: "这封信想发给谁？请说平台里的联系人昵称。", mode: "letter_waiting_recipient", requiresConfirmation: false, letterDraft: publicVoiceLetterDraft(session) };
+    }
+    session.recipientId = recipient.id;
+    session.recipientName = recipient.displayName;
+    session.status = "WAITING_CONTENT";
+    return { intent: "WRITE_LETTER", reply: `好的，你想对${recipient.displayName}说些什么？`, mode: "letter_waiting_content", recipient: recipient.displayName, recipientId: recipient.id, matchedRecipient: withUser(recipient), requiresConfirmation: false, letterDraft: publicVoiceLetterDraft(session) };
+  }
+
+  if (session.status === "WAITING_CONFIRMATION") {
+    if (!session.polishedBody && session.rawParts.join("").trim()) {
+      await polishVoiceLetterDraft(session);
+    }
+    const editReply = applyVoiceLetterEdit(session, text);
+    if (editReply) {
+      if (session.status !== "COLLECTING_CONTENT") await polishVoiceLetterDraft(session);
+      return { intent: "LETTER_REVIEW", reply: `${editReply} 我已经重新整理好了。要按这个版本发送给对方吗？`, mode: "letter_review", requiresConfirmation: false, recipient: session.recipientName, recipientId: session.recipientId, letterDraft: publicVoiceLetterDraft(session) };
+    }
+    if (isLetterConfirmation(text)) {
+      session.status = "SENDING";
+      try {
+        const result = await sendVoiceLetterSession(session, viewerId);
+        voiceLetterSessions.delete(viewerId);
+        return { intent: "LETTER_SENT", reply: `已发送给${result.recipient.displayName}。`, mode: "default", requiresConfirmation: false, recipient: result.recipient.displayName, recipientId: result.recipient.id, letterDraft: publicVoiceLetterDraft(session), delivery: { letterId: result.letter.id, printJob: result.printJob } };
+      } catch (error) {
+        session.status = "FAILED";
+        session.error = error.message;
+        return { intent: "LETTER_FAILED", reply: `发送失败：${error.message}`, mode: "letter_review", requiresConfirmation: false, recipient: session.recipientName, recipientId: session.recipientId, letterDraft: publicVoiceLetterDraft(session) };
+      }
+    }
+    return { intent: "LETTER_REVIEW", reply: "我已经整理好了。要按这个版本发送给对方吗？", mode: "letter_review", requiresConfirmation: false, recipient: session.recipientName, recipientId: session.recipientId, letterDraft: publicVoiceLetterDraft(session) };
+  }
+
+  const finish = splitLetterFinishText(text);
+  if (finish.content) session.rawParts.push(finish.content);
+  if (!session.recipientId && session.recipientName) {
+    const recipient = resolveVoiceLetterRecipient(session.recipientName);
+    if (recipient) {
+      session.recipientId = recipient.id;
+      session.recipientName = recipient.displayName;
+    }
+  }
+  if (!session.recipientId) {
+    session.status = "WAITING_RECIPIENT";
+    return { intent: "WRITE_LETTER", reply: "这封信想发给谁？", mode: "letter_waiting_recipient", requiresConfirmation: false, letterDraft: publicVoiceLetterDraft(session) };
+  }
+  if (!session.rawParts.join("").trim()) {
+    session.status = "WAITING_CONTENT";
+    return { intent: "WRITE_LETTER", reply: `好的，你想对${session.recipientName}说些什么？`, mode: "letter_waiting_content", requiresConfirmation: false, recipient: session.recipientName, recipientId: session.recipientId, letterDraft: publicVoiceLetterDraft(session) };
+  }
+  if (!finish.finished) {
+    session.status = "COLLECTING_CONTENT";
+    return { intent: "LETTER_CONTENT", reply: "好的，这一段已经记下了。你可以继续说，说“结束”后我帮你整理。", mode: "letter_collecting", requiresConfirmation: false, recipient: session.recipientName, recipientId: session.recipientId, letterDraft: publicVoiceLetterDraft(session) };
+  }
+  session.status = "WAITING_CONFIRMATION";
+  await polishVoiceLetterDraft(session);
+  return { intent: "LETTER_REVIEW", reply: "我已经整理好了。要按这个版本发送给对方吗？", mode: "letter_review", requiresConfirmation: false, recipient: session.recipientName, recipientId: session.recipientId, letterDraft: publicVoiceLetterDraft(session) };
 }
 
 async function dispatchVoicePrintJob(job) {
   job.status = "SENDING";
   job.updatedAt = new Date().toISOString();
   try {
-    const rendered = await renderThermalContentBatches({
-      kind: job.kind,
-      title: job.title,
-      content: job.content,
-      date: job.createdAt.slice(0, 10)
-    });
+    const rendered = job.kind === "letter"
+      ? await renderPlainThermalLetterBatches({
+        subject: job.title,
+        body: job.content,
+        recipient: job.recipient ?? "收件人",
+        sender: me.displayName,
+        date: job.createdAt.slice(0, 10)
+      })
+      : await renderThermalContentBatches({
+        kind: job.kind,
+        title: job.title,
+        content: job.content,
+        date: job.createdAt.slice(0, 10)
+      });
     await dispatchPrinterFeed(3);
     job.status = "PRINTING";
     for (const batch of rendered.batches) await dispatchPrinterBitmap(batch);
@@ -865,7 +1189,7 @@ function defaultTurtleSoup() {
     title: "午夜的纸条",
     story: "女孩每天睡前都会确认打印机里没有纸。第二天早上，桌上却总会出现一张写着“今天也要记得吃早餐”的纸条。她检查了门窗，家里没有别人。",
     truth: "她曾经让 AI 桌面助手每天早晨自动打印一句照顾自己的提醒。后来她忘记关闭定时任务，而热敏打印机里其实还留着一小段纸卷。",
-    rules: "你只能提出能用 YES / NO / 无关 / 接近 回答的问题，直到猜出汤底。",
+    rules: "你只能提出能用“是 / 不是 / 无关”回答的问题，直到猜出汤底。",
     difficulty: "warm-mystery"
   };
 }
@@ -886,34 +1210,29 @@ function localTurtleAnswer(question, storyInput, history = []) {
   const story = sanitizeTurtleStory(storyInput);
   const text = String(question ?? "").trim();
   let verdict = "IRRELEVANT";
-  let answer = "这个方向和真相关系不大。";
-  let hint = "试着关注纸条是如何出现的。";
+  let answer = "无关";
   let solved = false;
 
   if (/设备|打印机|AI|定时|提醒|自己|设置|自动|任务|纸卷|热敏/.test(text)) {
     verdict = "YES";
-    answer = "是，这个方向是关键。";
-    hint = "继续想：是谁设置了它，又为什么她忘了？";
+    answer = "是";
   }
   if (/陌生人|邻居|闯入|小偷|鬼|家人|别人/.test(text)) {
     verdict = "NO";
-    answer = "不是，没有其他人进入房间。";
-    hint = "真相更像一个被忘记的自动化任务。";
+    answer = "不是";
   }
   if (/忘记|定时|自动.*打印|打印.*提醒|AI.*提醒|任务/.test(text)) {
     verdict = "YES";
-    answer = "是，几乎猜到了。";
-    hint = "把“谁设置的”和“纸从哪里来”连起来，就是完整汤底。";
+    answer = "是";
     solved = history.length >= 1 || /纸卷|剩余|热敏/.test(text);
   }
   if (/汤底|答案|揭晓|真相|我猜/.test(text) && /定时|自动|提醒|打印/.test(text)) {
     verdict = "YES";
-    answer = "是，你已经接近完整汤底。";
-    hint = story.truth;
+    answer = "是";
     solved = true;
   }
 
-  return { verdict, answer, hint, solved };
+  return { verdict, answer, solved, truth: story.truth };
 }
 
 async function createTurtleSoup({ theme = "AI 桌面设备与热敏打印机", tone = "温暖轻悬疑" } = {}) {
@@ -940,6 +1259,17 @@ async function createTurtleSoup({ theme = "AI 桌面设备与热敏打印机", t
 
 async function answerTurtleSoup({ question, story, history = [] }) {
   const safeStory = sanitizeTurtleStory(story);
+  if (/公布答案|揭晓真相|结束游戏|查看答案|告诉我答案/u.test(String(question ?? ""))) {
+    return {
+      verdict: "REVEAL",
+      answer: "公布答案",
+      truth: safeStory.truth,
+      reasoning: "现在可以公开汤底：玩家已选择结束或揭晓真相。",
+      solved: true,
+      provider: "local-rule",
+      model: null
+    };
+  }
   const local = localTurtleAnswer(question, safeStory, history);
   try {
     const completion = await deepSeekChat({
@@ -947,7 +1277,7 @@ async function answerTurtleSoup({ question, story, history = [] }) {
       maxTokens: 700,
       temperature: 0.2,
       messages: [
-        { role: "system", content: "你是海龟汤主持人。根据汤面、汤底和历史，只能判断用户问题。输出 JSON：verdict, answer, hint, solved。verdict 只能是 YES、NO、IRRELEVANT、CLOSE。answer 用中文，简短。不要直接泄露 truth，除非用户已经明确猜中。solved 只有用户基本说出完整真相时才为 true。" },
+        { role: "system", content: "你是海龟汤主持人。根据汤面、汤底和历史，只能判断用户问题。输出 JSON：verdict, answer, solved。verdict 只能是 YES、NO、IRRELEVANT。answer 只能是“是”“不是”或“无关”，禁止解释、禁止提示、禁止泄露汤底。solved 只有用户基本说出完整真相时才为 true；即便 solved=true，answer 仍只能是三选一。" },
         { role: "user", content: JSON.stringify({
           story: safeStory.story,
           truth: safeStory.truth,
@@ -956,24 +1286,95 @@ async function answerTurtleSoup({ question, story, history = [] }) {
         }) }
       ]
     });
-    const verdict = ["YES", "NO", "IRRELEVANT", "CLOSE"].includes(completion.content?.verdict) ? completion.content.verdict : local.verdict;
+    const verdict = ["YES", "NO", "IRRELEVANT"].includes(completion.content?.verdict) ? completion.content.verdict : local.verdict;
+    const answer = verdict === "YES" ? "是" : verdict === "NO" ? "不是" : "无关";
     return {
       verdict,
-      answer: String(completion.content?.answer ?? local.answer).slice(0, 160),
-      hint: String(completion.content?.hint ?? local.hint).slice(0, 220),
+      answer,
+      truth: null,
+      reasoning: null,
       solved: Boolean(completion.content?.solved),
       provider: "deepseek",
       model: completion.model
     };
   } catch (error) {
-    return { ...local, provider: "local-fallback", model: null, providerError: error.code ?? "AI_PROVIDER_ERROR" };
+    return { ...local, truth: null, reasoning: null, provider: "local-fallback", model: null, providerError: error.code ?? "AI_PROVIDER_ERROR" };
   }
+}
+
+function publicTurtleSession(session) {
+  return {
+    id: session.id,
+    title: session.title,
+    story: session.story,
+    rules: session.rules,
+    difficulty: session.difficulty,
+    history: session.history ?? [],
+    revealed: Boolean(session.revealed),
+    truth: session.revealed ? session.truth : null,
+    provider: session.provider,
+    model: session.model
+  };
+}
+
+async function startVoiceTurtleSoup(viewerId) {
+  const game = await createTurtleSoup();
+  const session = {
+    ...game,
+    userId: viewerId,
+    history: [],
+    revealed: false,
+    createdAt: new Date().toISOString()
+  };
+  turtleSessions.set(session.id, session);
+  activeTurtleSessions.set(viewerId, session.id);
+  return {
+    intent: "START_TURTLE_SOUP",
+    reply: `海龟汤开始：《${session.title}》\n${session.story}\n请提出一个可以用“是、不是、无关”回答的问题。`,
+    mode: "turtle_soup",
+    requiresConfirmation: false,
+    turtleGame: publicTurtleSession(session),
+    provider: session.provider,
+    model: session.model
+  };
+}
+
+async function continueVoiceTurtleSoup(viewerId, question) {
+  const sessionId = activeTurtleSessions.get(viewerId);
+  const session = sessionId ? turtleSessions.get(sessionId) : null;
+  if (!session || session.userId !== viewerId) return startVoiceTurtleSoup(viewerId);
+  const result = await answerTurtleSoup({
+    question,
+    story: session,
+    history: session.history
+  });
+  session.history.push({
+    question,
+    answer: result.answer,
+    verdict: result.verdict,
+    createdAt: new Date().toISOString()
+  });
+  if (result.verdict === "REVEAL") {
+    session.revealed = true;
+    activeTurtleSessions.delete(viewerId);
+  }
+  return {
+    intent: result.verdict === "REVEAL" ? "TURTLE_SOUP_REVEAL" : "TURTLE_SOUP_ANSWER",
+    reply: result.verdict === "REVEAL"
+      ? `汤底揭晓：${session.truth}`
+      : result.answer,
+    mode: result.verdict === "REVEAL" ? "default" : "turtle_soup",
+    requiresConfirmation: false,
+    turtleGame: publicTurtleSession(session),
+    provider: result.provider,
+    model: result.model
+  };
 }
 
 function printerBaseUrl() {
   const configured = process.env.ESP_PRINTER_BASE_URL ?? process.env.ESP32_PRINTER_BASE_URL;
   if (configured) return configured.replace(/\/+$/, "");
-  return `http://${process.env.ESP_PRINTER_IP ?? "10.76.11.223"}`;
+  return `http://${process.env.ESP_PRINTER_IP ?? "127.0.0.1"}`;
 }
 
 function normalizePrintOptions(input = {}) {
@@ -1137,7 +1538,7 @@ function dailyBriefingContent(briefing) {
     "2. 一个值得关注的开源项目：本地知识库 + Agent 工作流。",
     "3. 今日灵感：把复杂信息整理成一张能打印的小纸条。",
     "",
-    "MIMO 已为你压缩成热敏纸阅读版。"
+    "小P已为你压缩成热敏纸阅读版。"
   ].join("\n");
 }
 
@@ -1320,12 +1721,24 @@ export async function handleApiRequest(request, response, requestId) {
         return true;
       }
       const viewerDevice = deviceForUser(viewerId);
-      const decision = await orchestrateTranscript(transcript, {
-        mode: body.mode ?? "default",
-        recipient: body.recipient ?? null,
-        pendingPrintable: body.pendingPrintable ?? null,
-        recentConversation: recentConversationContext(viewerId)
-      });
+      let decision;
+      if (body.mode === "turtle_soup") {
+        decision = await continueVoiceTurtleSoup(viewerId, transcript);
+      } else if (activeVoiceLetterSession(viewerId)) {
+        decision = await handleVoiceLetterTurn(viewerId, transcript);
+      } else {
+        decision = enrichContactDecision(await orchestrateTranscript(transcript, {
+          mode: body.mode ?? "default",
+          recipient: body.recipient ?? null,
+          pendingPrintable: body.pendingPrintable ?? null,
+          recentConversation: recentConversationContext(viewerId)
+        }), viewerId);
+        if (decision.intent === "START_TURTLE_SOUP") {
+          decision = await startVoiceTurtleSoup(viewerId);
+        } else if (decision.intent === "WRITE_LETTER") {
+          decision = await handleVoiceLetterTurn(viewerId, transcript, decision);
+        }
+      }
       if (decision.reprintLast) {
         const previous = [...voicePrintJobs].reverse().find((item) => item.userId === viewerId);
         decision.printable = previous ? { kind: previous.kind, title: previous.title, content: previous.content } : null;
@@ -1356,6 +1769,8 @@ export async function handleApiRequest(request, response, requestId) {
         executionResult,
         deviceId: viewerDevice.id,
         printable: decision.printable ?? null,
+        turtleGame: decision.turtleGame ?? null,
+        letterDraft: decision.letterDraft ?? null,
         requiresConfirmation: Boolean(decision.requiresConfirmation),
         printStatus: "NOT_PRINTED",
         source: body.source === "microphone" ? "microphone" : "text",
@@ -1376,7 +1791,7 @@ export async function handleApiRequest(request, response, requestId) {
           deviceId: viewerDevice.id,
           target: "confirmed",
           kind: decision.printable.kind ?? "note",
-          title: decision.printable.title ?? "AI Hub 内容",
+          title: decision.printable.title ?? "PrintPal 内容",
           content: decision.printable.content ?? "",
           status: "WAITING",
           createdAt: new Date().toISOString(),
@@ -1516,6 +1931,8 @@ export async function handleApiRequest(request, response, requestId) {
         model: config.model,
         keyExposed: false,
         capabilities: ["chat", "intent", "plan", "letter-polish", "summary"],
+        imageProcessor: "local-pixel-canny",
+        imageCapabilities: ["upload", "camera", "pixelation", "grayscale-quantization", "canny-outline", "thermal-print"],
         requestId
       }, requestId);
       return true;
@@ -1728,7 +2145,7 @@ export async function handleApiRequest(request, response, requestId) {
       const body = await readJson(request);
       const question = String(body.question ?? "").trim();
       if (!question) {
-        const issue = problem(422, "TUTOR_QUESTION_REQUIRED", "Question is required", "Write a learning question before asking MIMO.", requestId);
+        const issue = problem(422, "TUTOR_QUESTION_REQUIRED", "Question is required", "Write a learning question before asking 小P.", requestId);
         send(response, issue.status, issue.body, requestId);
         return true;
       }
@@ -1751,7 +2168,7 @@ export async function handleApiRequest(request, response, requestId) {
           maxTokens: 800,
           temperature: 1,
           messages: [
-            { role: "system", content: "你是 MIMO，一名温暖、准确、善于用生活例子解释知识的学习助手。用简体中文回答；先直接回答，再给一个小例子，最后给一个可执行的复习建议。控制在 500 字以内，不要假装调用设备或打印机。" },
+            { role: "system", content: "你是小P，一名温暖、准确、善于用生活例子解释知识的学习助手。用简体中文回答；先直接回答，再给一个小例子，最后给一个可执行的复习建议。控制在 500 字以内，不要假装调用设备或打印机。" },
             ...recentMessages,
             { role: "user", content: question.slice(0, 2_000) }
           ]
@@ -1781,7 +2198,7 @@ export async function handleApiRequest(request, response, requestId) {
         send(response, issue.status, issue.body, requestId);
         return true;
       }
-      const decision = await orchestrateTranscript(transcript, body.context ?? {});
+      const decision = enrichContactDecision(await orchestrateTranscript(transcript, body.context ?? {}), viewerId);
       send(response, 200, { ...decision, runId: `airun-${crypto.randomUUID()}`, requestId }, requestId);
       return true;
     }
@@ -1789,7 +2206,16 @@ export async function handleApiRequest(request, response, requestId) {
     if (method === "POST" && path === "/games/turtle-soup/start") {
       const body = await readJson(request);
       const game = await createTurtleSoup(body);
-      send(response, 200, { ...game, requestId }, requestId);
+      const session = {
+        ...game,
+        userId: viewerId,
+        history: [],
+        revealed: false,
+        createdAt: new Date().toISOString()
+      };
+      turtleSessions.set(game.id, session);
+      activeTurtleSessions.set(viewerId, game.id);
+      send(response, 200, { ...publicTurtleSession(session), requestId }, requestId);
       return true;
     }
 
@@ -1801,15 +2227,59 @@ export async function handleApiRequest(request, response, requestId) {
         send(response, issue.status, issue.body, requestId);
         return true;
       }
+      const sessionId = String(body.sessionId ?? body.gameId ?? body.story?.id ?? "").trim();
+      const session = sessionId ? turtleSessions.get(sessionId) : null;
+      const story = session && session.userId === viewerId ? session : body.story;
+      const history = session && session.userId === viewerId
+        ? session.history
+        : Array.isArray(body.history) ? body.history : [];
       const result = await answerTurtleSoup({
         question,
-        story: body.story,
-        history: Array.isArray(body.history) ? body.history : []
+        story,
+        history
       });
+      if (session && session.userId === viewerId) {
+        session.history.push({ question, answer: result.answer, verdict: result.verdict, createdAt: new Date().toISOString() });
+        if (result.verdict === "REVEAL") {
+          session.revealed = true;
+          activeTurtleSessions.delete(viewerId);
+        }
+      }
       send(response, 200, {
         ...result,
         question,
+        sessionId: session?.id ?? (sessionId || null),
+        history: session?.history ?? history,
         answer: result.answer,
+        requestId
+      }, requestId);
+      return true;
+    }
+
+    const turtlePrintMatch = path.match(/^\/games\/turtle-soup\/([^/]+)\/print$/);
+    if (method === "POST" && turtlePrintMatch) {
+      const session = turtleSessions.get(turtlePrintMatch[1]);
+      if (!session || session.userId !== viewerId) {
+        const issue = problem(404, "TURTLE_SESSION_NOT_FOUND", "Turtle Soup session not found", "找不到这局海龟汤，或你没有访问权限。", requestId);
+        send(response, issue.status, issue.body, requestId);
+        return true;
+      }
+      const content = [
+        "====== 海龟汤 ======",
+        "",
+        `标题：${session.title}`,
+        "",
+        `谜题：${session.story}`,
+        "",
+        "玩家提问记录：",
+        ...(session.history.length ? session.history.map((item, index) => `${index + 1}. ${item.question} / ${item.answer}`) : ["无"]),
+        "",
+        `最终答案：${session.revealed ? session.truth : "尚未公布"}`,
+        "",
+        "===================="
+      ].join("\n");
+      send(response, 200, {
+        printable: { kind: "story", title: `海龟汤：${session.title}`, content },
         requestId
       }, requestId);
       return true;
@@ -1861,7 +2331,16 @@ export async function handleApiRequest(request, response, requestId) {
         }
         const source = path === "/photos/hardware" ? "hardware" : String(form.get("source") ?? "upload").slice(0, 24);
         const purpose = String(form.get("purpose") ?? "memory").slice(0, 24);
-        const processed = await processThermalImage(bytes, { profile: purpose === "letter" ? "letter" : "album" });
+        const profile = purpose === "letter" ? "letter" : purpose === "print" ? "print" : "album";
+        const processed = await processThermalImage(bytes, {
+          profile,
+          pixelSize: form.get("pixelSize"),
+          grayscaleLevels: form.get("grayscaleLevels"),
+          contrast: form.get("contrast"),
+          brightness: form.get("brightness"),
+          cannyLow: form.get("cannyLow"),
+          cannyHigh: form.get("cannyHigh")
+        });
         const photo = {
           id: `photo-${crypto.randomUUID()}`,
           userId: viewerId,
@@ -1876,6 +2355,98 @@ export async function handleApiRequest(request, response, requestId) {
         send(response, 201, { photo, requestId }, requestId);
       } catch (error) {
         const issue = problem(400, "PHOTO_PROCESS_FAILED", "Photo could not be processed", error.message, requestId);
+        send(response, issue.status, issue.body, requestId);
+      }
+      return true;
+    }
+
+    const photoPrintMatch = path.match(/^\/printer\/photos\/([^/]+)$/);
+    if (method === "POST" && photoPrintMatch) {
+      const viewerDevice = deviceForUser(viewerId);
+      if (!viewerDevice.id) {
+        const issue = problem(409, "DEVICE_NOT_BOUND", "Device not bound", "请先绑定自己的 ESP32 设备再打印。", requestId);
+        send(response, issue.status, issue.body, requestId);
+        return true;
+      }
+      const photo = photoAssets.find((asset) => asset.id === photoPrintMatch[1] && asset.userId === viewerId);
+      if (!photo) {
+        const issue = problem(404, "PHOTO_NOT_FOUND", "Photo not found", "The photo does not exist or does not belong to the current user.", requestId);
+        send(response, issue.status, issue.body, requestId);
+        return true;
+      }
+      const body = await readJson(request);
+      const idempotent = requireIdempotency(request, "printer.photo", {
+        photoId: photo.id,
+        profile: photo.processed.profile,
+        version: photo.createdAt
+      });
+      if (idempotent.error) {
+        const issue = problem(400, idempotent.error, "Idempotency key required", "Provide Idempotency-Key before printing a photo.", requestId);
+        send(response, issue.status, issue.body, requestId);
+        return true;
+      }
+      if (idempotent.cached) {
+        send(response, 200, idempotent.cached, requestId, { "Idempotent-Replayed": "true" });
+        return true;
+      }
+
+      const job = {
+        id: `pj-${crypto.randomUUID()}`,
+        userId: viewerId,
+        letterId: null,
+        photoId: photo.id,
+        deviceId: viewerDevice.id,
+        title: photo.title,
+        status: "PRINTING",
+        format: "thermal_58mm",
+        pageCount: 1,
+        createdAt: new Date().toISOString(),
+        finishedAt: null,
+        version: 1,
+        source: String(body.source ?? "image-studio").slice(0, 40)
+      };
+      printJobs.unshift(job);
+      try {
+        const rotate180 = String(process.env.ESP_PRINTER_ROTATE_180 ?? "true").toLowerCase() !== "false";
+        const feedBefore = Math.max(0, Math.min(12, Number.parseInt(body.feedBefore ?? "3", 10) || 0));
+        const feedAfter = Math.max(0, Math.min(12, Number.parseInt(body.feedAfter ?? "4", 10) || 0));
+        const rendered = await renderThermalImageBatches(photo.processed.previewDataUrl, { rotate180 });
+        await dispatchPrinterFeed(feedBefore);
+        const batches = [];
+        for (const batch of rendered.batches) {
+          const dispatched = await dispatchPrinterBitmap(batch);
+          batches.push({
+            index: batch.index + 1,
+            width: batch.width,
+            height: batch.height,
+            bitmapBytes: batch.bitmap.byteLength,
+            endpoint: dispatched.endpoint
+          });
+        }
+        await dispatchPrinterFeed(feedAfter).catch(() => null);
+        job.status = "SUCCESS";
+        job.pageCount = rendered.batchCount;
+        job.finishedAt = new Date().toISOString();
+        job.version += 1;
+        const result = idempotent.commit({
+          success: true,
+          photoId: photo.id,
+          job,
+          target: printerBaseUrl(),
+          template: "thermal-photo-serpentine-v3",
+          width: rendered.width,
+          height: rendered.height,
+          batchCount: rendered.batchCount,
+          batches,
+          rotate180,
+          requestId
+        });
+        send(response, 202, result, requestId);
+      } catch (error) {
+        job.status = "FAILED_RETRYABLE";
+        job.error = error.message;
+        job.version += 1;
+        const issue = problem(502, "PHOTO_PRINTER_UNAVAILABLE", "Photo printer unavailable", `Could not dispatch the 384px photo: ${error.message}`, requestId);
         send(response, issue.status, issue.body, requestId);
       }
       return true;
@@ -1960,11 +2531,14 @@ export async function handleApiRequest(request, response, requestId) {
 
     if (method === "POST" && path === "/printer/letter/preview") {
       const body = await readJson(request);
-      const preview = thermalLetterPreviewDataUrl(body);
+      const preview = body.template === "paper-letter"
+        ? thermalLetterPreviewDataUrl(body)
+        : plainThermalLetterPreviewDataUrl(body);
       send(response, 200, {
         success: true,
         width: preview.width,
         height: preview.height,
+        paper: preview.paper ?? "58mm",
         pageCount: preview.pageCount,
         totalHeight: preview.totalHeight,
         bodyWasClipped: preview.bodyWasClipped,
@@ -2079,7 +2653,9 @@ export async function handleApiRequest(request, response, requestId) {
         const rotate180 = String(process.env.ESP_PRINTER_ROTATE_180 ?? "true").toLowerCase() !== "false";
         const feedBefore = Math.max(0, Math.min(12, Number.parseInt(body.feedBefore ?? "3", 10) || 0));
         const feedAfter = Math.max(0, Math.min(12, Number.parseInt(body.feedAfter ?? "4", 10) || 0));
-        const rendered = await renderThermalLetterBatches(body, { rotate180 });
+        const rendered = body.template === "paper-letter"
+          ? await renderThermalLetterBatches(body, { rotate180 })
+          : await renderPlainThermalLetterBatches(body, { rotate180 });
         const feedBeforeResult = await dispatchPrinterFeed(feedBefore);
         const batchResults = [];
         for (const batch of rendered.batches) {
@@ -2102,7 +2678,8 @@ export async function handleApiRequest(request, response, requestId) {
         const responseBody = idempotent.commit({
           success: true,
           target: printerBaseUrl(),
-          template: "paper-letter-v1",
+          template: body.template === "paper-letter" ? "paper-letter-v1" : "plain-letter-v1",
+          paper: rendered.paper ?? "58mm",
           width: rendered.width,
           height: rendered.height,
           batchCount: rendered.batches.length,
@@ -2162,7 +2739,7 @@ export async function handleApiRequest(request, response, requestId) {
             maxTokens: 1_200,
             temperature: action === "generate" ? 1.2 : 0.7,
             messages: [
-              { role: "system", content: "你是 AI Hub OS 的写信助手。输出 json，字段只能包含 subject 和 suggestion。将用户口语或草稿整理成自然、温暖、清晰的中文信件；去掉嗯、呃、那个、重复句和不完整表达；必须保留用户事实，严禁编造人物、物品、时间、地点和共同经历。若原始内容为空，只能写通用问候，不得补充具体故事。正文以“见字如面。”开头，包含自然称呼、分段正文、结尾祝福和署名，不超过 1200 字。" },
+              { role: "system", content: "你是 PrintPal 的写信助手，桌面机器人叫小P。输出 json，字段只能包含 subject 和 suggestion。将用户口语或草稿整理成自然、温暖、清晰的中文信件；去掉嗯、呃、那个、重复句和不完整表达；必须保留用户事实，严禁编造人物、物品、时间、地点和共同经历。若原始内容为空，只能写通用问候，不得补充具体故事。正文以“见字如面。”开头，包含自然称呼、分段正文、结尾祝福和署名，不超过 1200 字。" },
               { role: "user", content: `动作：${action}\n主题：${subject}\n原始内容：${String(body.body ?? "").slice(0, 1_500)}\n请输出 json。` }
             ]
           });

@@ -105,18 +105,41 @@ export const api = {
     body: JSON.stringify({ fileName })
   }),
   photos: (purpose = "") => request(`/photos${purpose ? `?purpose=${encodeURIComponent(purpose)}` : ""}`),
-  uploadPhoto: (file, { source = "upload", purpose = "memory", title = "" } = {}) => {
+  uploadPhoto: (file, {
+    source = "upload",
+    purpose = "memory",
+    title = "",
+    pixelSize = 1,
+    grayscaleLevels = 32,
+    contrast = 1.06,
+    brightness = 1,
+    cannyLow = 0,
+    cannyHigh = 0
+  } = {}) => {
     const form = new FormData();
     form.set("image", file);
     form.set("source", source);
     form.set("purpose", purpose);
     if (title) form.set("title", title);
+    if (purpose === "print") {
+      form.set("pixelSize", String(pixelSize));
+      form.set("grayscaleLevels", String(grayscaleLevels));
+      form.set("contrast", String(contrast));
+      form.set("brightness", String(brightness));
+      form.set("cannyLow", String(cannyLow));
+      form.set("cannyHigh", String(cannyHigh));
+    }
     return request(source === "hardware" ? "/photos/hardware" : "/photos", {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey() },
       body: form
     });
   },
+  printPhoto: (photoId, { feedBefore = 3, feedAfter = 4, source = "image-studio" } = {}) => request(`/printer/photos/${encodeURIComponent(photoId)}`, {
+    method: "POST",
+    headers: { "Idempotency-Key": `photo-print-${photoId}-${idempotencyKey()}` },
+    body: JSON.stringify({ feedBefore, feedAfter, source })
+  }),
   journalSummary: (body) => request("/ai/journal/summary", {
     method: "POST",
     body: JSON.stringify({ body })

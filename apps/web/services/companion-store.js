@@ -18,7 +18,7 @@ export const initialCompanionState = Object.freeze({
   },
   device: {
     id: "mimo-desk-01",
-    name: "MIMO One",
+    name: "小P",
     connected: false,
     mode: "idle",
     power: "on",
@@ -39,7 +39,7 @@ export const initialCompanionState = Object.freeze({
   profile: {
     city: "上海",
     companionTone: "温暖、简洁",
-    wakeWord: "Hi MIMO"
+    wakeWord: "Hi 小P"
   },
   tasks: [
     { id: "task-1", title: "复习 20 个英语单词", time: "09:30", done: false },
@@ -50,7 +50,7 @@ export const initialCompanionState = Object.freeze({
     streak: 7,
     wordIndex: 0,
     words: [
-      { word: "serendipity", phonetic: "/ˌserənˈdɪpəti/", meaning: "意外发现美好事物的能力", example: "Meeting MIMO was pure serendipity." },
+      { word: "serendipity", phonetic: "/ˌserənˈdɪpəti/", meaning: "意外发现美好事物的能力", example: "Meeting 小P was pure serendipity." },
       { word: "curious", phonetic: "/ˈkjʊəriəs/", meaning: "好奇的；求知欲强的", example: "Stay curious about how things work." },
       { word: "companion", phonetic: "/kəmˈpænjən/", meaning: "伙伴；陪伴者", example: "A quiet companion sits on the desk." },
       { word: "gentle", phonetic: "/ˈdʒentl/", meaning: "温和的；轻柔的", example: "Be gentle with your unfinished plans." },
@@ -61,7 +61,7 @@ export const initialCompanionState = Object.freeze({
     { id: "journal-1", date: "今天", mood: "calm", title: "一个安静的下午", body: "把设备和网页真正连起来了，事情开始变得具体。", summary: "今天的关键词是：连接、进展、平静。" }
   ],
   messages: [
-    { role: "assistant", content: "下午好，我是 MIMO。今天想一起学点什么？" }
+    { role: "assistant", content: "下午好，我是小P。今天想一起学点什么？" }
   ],
   letters: [],
   printJobs: [
@@ -113,7 +113,7 @@ export function mapGestureToAction(gesture, language = "CN") {
 }
 
 export function createPrintJob(input, now = new Date()) {
-  const title = String(input?.title ?? "MIMO Note").trim().slice(0, 80) || "MIMO Note";
+  const title = String(input?.title ?? "PrintPal Note").trim().slice(0, 80) || "PrintPal Note";
   const content = String(input?.content ?? "").trim().slice(0, 2_000);
   return {
     id: `print-${now.getTime()}`,
@@ -131,7 +131,7 @@ export function createLetter({ recipient, subject, keywords, tone = "温暖" }) 
   const detail = String(keywords || "分享一些平凡但闪亮的瞬间").trim();
   return {
     subject: topic,
-    body: `${who}：\n\n见字如面。\n\n想和你聊聊「${topic}」。${detail}。有时生活像桌边缓慢亮起的一盏小灯，不催促，却让人安心。希望这封信抵达时，你刚好有一段安静的时间。\n\n愿你今天也遇见一点小小的好事。\n\n来自 MIMO 与我`,
+    body: `${who}：\n\n见字如面。\n\n想和你聊聊「${topic}」。${detail}。有时生活像桌边缓慢亮起的一盏小灯，不催促，却让人安心。希望这封信抵达时，你刚好有一段安静的时间。\n\n愿你今天也遇见一点小小的好事。\n\n来自小P与我`,
     tone
   };
 }

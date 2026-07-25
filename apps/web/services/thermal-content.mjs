@@ -8,11 +8,11 @@ const LINES_PER_PAGE = 16;
 const LINE_HEIGHT = 31;
 
 const templateLabels = Object.freeze({
-  chat: "MIMO CONVERSATION",
+  chat: "PRINTPAL CONVERSATION",
   todo: "TODAY · TODO LIST",
   word: "STUDY · WORD CARDS",
   story: "PLAY · STORY CARD",
-  note: "AI HUB · NOTE"
+  note: "PRINTPAL · NOTE"
 });
 
 function escapeXml(value) {
@@ -76,10 +76,10 @@ function pageSvg({ kind, title, lines, pageIndex, pageCount, date }) {
       <rect x="10" y="10" width="364" height="${height - 20}" rx="16" fill="none" stroke="#000" stroke-width="2"/>
       <rect x="18" y="18" width="348" height="${height - 36}" rx="11" fill="none" stroke="#000" stroke-width="1" stroke-dasharray="4 5"/>
       <circle cx="43" cy="48" r="17" fill="#000"/><text x="43" y="54" text-anchor="middle" fill="#fff" style="fill:#fff;font-size:15px;font-weight:900">AI</text>
-      <text x="70" y="44" class="brand">AI HUB OS</text><text x="70" y="61" class="micro">${escapeXml(label)}</text>
+      <text x="70" y="44" class="brand">PrintPal</text><text x="70" y="61" class="micro">${escapeXml(label)}</text>
       <text x="359" y="50" text-anchor="end" class="page">${pageIndex + 1}/${pageCount}</text>
       <path d="M25 79 H359" stroke="#000" stroke-width="4"/>
-      <text x="25" y="119" class="title">${escapeXml(String(title || "MIMO NOTE").slice(0, 30))}</text>
+      <text x="25" y="119" class="title">${escapeXml(String(title || "PRINTPAL NOTE").slice(0, 30))}</text>
       <path d="M25 133 H359" stroke="#000" stroke-width="1" stroke-dasharray="3 4"/>
       ${rows}
       <path d="M25 ${footerY} H359" stroke="#000" stroke-width="1"/>
@@ -91,9 +91,9 @@ function pageSvg({ kind, title, lines, pageIndex, pageCount, date }) {
 
 export function paginateThermalContent(input = {}) {
   const kind = Object.hasOwn(templateLabels, input.kind) ? input.kind : "note";
-  const title = String(input.title ?? "MIMO Note").trim().slice(0, 80) || "MIMO Note";
+  const title = String(input.title ?? "PrintPal Note").trim().slice(0, 80) || "PrintPal Note";
   const raw = String(input.content ?? "").trim().slice(0, 3_000);
-  const lines = wrapThermalContent(raw || "这是一张来自 AI Hub OS 的小纸条。", kind === "word" ? 16 : 17);
+  const lines = wrapThermalContent(raw || "这是一张来自 PrintPal 的小纸条。", kind === "word" ? 16 : 17);
   const groups = [];
   for (let offset = 0; offset < lines.length; offset += LINES_PER_PAGE) groups.push(lines.slice(offset, offset + LINES_PER_PAGE));
   if (!groups.length) groups.push([""]);
@@ -145,4 +145,3 @@ export function thermalContentPreviewDataUrl(input) {
     previewDataUrl: `data:image/svg+xml;base64,${Buffer.from(first.svg, "utf8").toString("base64")}`
   };
 }
-

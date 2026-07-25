@@ -1,11 +1,24 @@
 ﻿import { api, ApiProblem } from "./services/api-client.js";
 import { DeviceBus } from "./services/device-bus.js";
 import { createCompanionStore, createPrintJob } from "./services/companion-store.js";
+import {
+  SLEEP_SCENARIOS,
+  SLEEP_STATES,
+  createSleepSession,
+  environmentTip,
+  formatSleepDuration,
+  generateSleepReport,
+  relaxationPhase,
+  sleepReportPrintContent,
+  tickMonitoring
+} from "./services/sleep-simulator.js";
 
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 const bus = new DeviceBus("ai-hub-web");
 const companionStore = createCompanionStore();
+let imageCameraStream = null;
+let sleepTicker = null;
 
 const MATCH_INTEREST_OPTIONS = ["AI", "机器人", "ESP32", "摄影", "游戏", "阅读", "音乐", "旅行", "手帐", "插画", "开源", "自然", "生活", "猫"];
 const MATCH_INTEREST_META = {
@@ -51,6 +64,7 @@ const MATCH_QUIZ_STEPS = [
   }
 ];
 const DAILY_BRIEFING_SOURCE_OPTIONS = ["AI新闻", "科技产品", "开源项目", "财经", "美股", "汇率", "天气", "日历"];
+const SLEEP_STORAGE_KEY = "printpal-sleep-state:v1";
 
 function matchProfileStorageKey(userId = "guest") {
   return `aihub-match-profile:${userId}`;
@@ -71,6 +85,24 @@ function loadMatchProfile(userId = "guest") {
 }
 
 const initialMatchProfile = loadMatchProfile();
+
+function loadSleepState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SLEEP_STORAGE_KEY) ?? "null");
+    if (saved?.session) return { session: createSleepSession(saved.session), report: saved.report ?? null };
+  } catch {}
+  return { session: createSleepSession(), report: null };
+}
+
+function saveSleepState() {
+  try {
+    localStorage.setItem(SLEEP_STORAGE_KEY, JSON.stringify({ session: ui.sleepSession, report: ui.sleepReport }));
+  } catch {
+    // Sleep mode remains usable without local persistence.
+  }
+}
+
+const initialSleepState = loadSleepState();
 
 function applyCurrentUser(user) {
   ui.currentUser = user;
@@ -121,7 +153,18 @@ const ui = {
   voiceResult: null,
   voiceLetterParts: [],
   voiceLetterSendKey: null,
-  voiceSending: false
+  voiceSending: false,
+  imagePhotos: [],
+  imageSelectedId: null,
+  imageBusy: false,
+  imagePixelSize: 1,
+  imageGrayscaleLevels: 32,
+  imageContrast: 1.06,
+  imageCannyLow: 0,
+  imageCannyHigh: 0,
+  sleepSession: initialSleepState.session,
+  sleepReport: initialSleepState.report,
+  sleepPrinting: false
 };
 
 const nav = [
@@ -129,6 +172,8 @@ const nav = [
   ["/community", "社区", "community"],
   ["/match", "匹配", "match"],
   ["/letter", "信件", "letter"],
+  ["/images", "图像", "camera"],
+  ["/sleep", "智能睡眠", "moon"],
   ["/conversations", "对话记录", "community"],
   ["/prints", "打印记录", "printer"],
   ["/device", "设备", "device"]
@@ -139,6 +184,8 @@ const mobileNav = [
   ["/community", "社区", "community"],
   ["/match", "匹配", "match"],
   ["/letter", "信件", "letter"],
+  ["/images", "图像", "camera"],
+  ["/sleep", "睡眠", "moon"],
   ["/device", "设备", "device"]
 ];
 
@@ -177,7 +224,8 @@ const paths = {
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/>',
   flag: '<path d="M5 22V4M5 4h12l-2 4 2 4H5"/>',
-  pause: '<path d="M8 5v14M16 5v14"/>'
+  pause: '<path d="M8 5v14M16 5v14"/>',
+  moon: '<path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a7 7 0 1 0 11 11Z"/>'
 };
 
 function icon(name, size = 20, filled = false) {
@@ -204,12 +252,18 @@ function currentPath() {
     "/", "/welcome", "/login", "/register", "/forgot-password", "/reset-password",
     "/community", "/create-post", "/match", "/match/preferences",
     "/letter", "/letter/create", "/profile",
-    "/account", "/conversations", "/prints", "/device"
+    "/account", "/conversations", "/prints", "/device", "/images", "/sleep"
   ];
   return allowed.includes(path) ? path : "/";
 }
 
+function stopImageCamera() {
+  imageCameraStream?.getTracks().forEach((track) => track.stop());
+  imageCameraStream = null;
+}
+
 function navigate(path) {
+  if (path !== "/images") stopImageCamera();
   document.body.classList.remove("mobile-menu-open");
   history.pushState({}, "", path);
   render();
@@ -250,12 +304,51 @@ function showLetterSendResult({ tone = "success", title, message, detail, action
   overlay.querySelector("[data-close-send-result]").focus();
 }
 
+function showPhotoPrintConfirm(photo) {
+  document.querySelector("[data-photo-print-confirm]")?.remove();
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.dataset.photoPrintConfirm = "true";
+  overlay.innerHTML = `<section class="photo-print-dialog" role="dialog" aria-modal="true" aria-labelledby="photo-print-title">
+    <button class="modal-close" type="button" data-cancel-photo-print aria-label="关闭">${icon("close", 18)}</button>
+    <p class="eyebrow">PHYSICAL PRINT</p>
+    <h2 id="photo-print-title">确认打印这张照片？</h2>
+    <figure><img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 热敏像素预览"></figure>
+    <div><span>${photo.processed.width} × ${photo.processed.height}px</span><span>${escapeHtml(photo.processed.processor)}</span></div>
+    <p>确认后才会发送到已绑定的热敏打印机。</p>
+    <footer>
+      <button class="outline-button" type="button" data-cancel-photo-print>再看看</button>
+      <button class="primary-button" type="button" data-confirm-photo-print="${photo.id}">${icon("printer", 16)}确认打印</button>
+    </footer>
+  </section>`;
+  document.body.append(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelectorAll("[data-cancel-photo-print]").forEach((button) => button.addEventListener("click", close));
+  overlay.querySelector("[data-confirm-photo-print]").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = "正在发送…";
+    try {
+      const result = await api.printPhoto(photo.id);
+      overlay.remove();
+      toast(`照片已打印 · ${result.batchCount} 批`, "success");
+      render();
+    } catch (error) {
+      button.disabled = false;
+      button.innerHTML = `${icon("printer", 16)}重新打印`;
+      toast(`打印失败：${error.message}`, "error");
+    }
+  });
+  overlay.querySelector("[data-confirm-photo-print]").focus();
+}
+
 function loading() {
-  return `<div class="loading-view"><span class="loading-mark"><i></i><i></i><i></i></span><p>正在连接 AI Hub OS…</p></div>`;
+  return `<div class="loading-view"><span class="loading-mark"><i></i><i></i><i></i></span><p>正在连接 PrintPal…</p></div>`;
 }
 
 function logo() {
-  return `<span class="hub-logo-mark"><i></i><b>A</b></span><span class="hub-logo-copy"><strong>AI HUB</strong><small>OS / COMPANION</small></span>`;
+  return `<span class="hub-logo-mark"><i></i><b>P</b></span><span class="hub-logo-copy"><strong>PrintPal</strong><small>小P / Companion</small></span>`;
 }
 
 function shell(content, activePath = currentPath()) {
@@ -266,12 +359,10 @@ function shell(content, activePath = currentPath()) {
       : activePath.startsWith("/letter/")
         ? "/letter"
         : activePath;
-  const status = ui.unifiedDevice ?? {};
-  const printerStatus = status.printer?.status ?? "CHECKING";
   const user = ui.currentUser ?? {};
   return `<div class="hub-app">
     <header class="topbar">
-      <button class="hub-logo" data-nav="/" aria-label="AI Hub OS 首页">${logo()}</button>
+      <button class="hub-logo" data-nav="/" aria-label="PrintPal 首页">${logo()}</button>
       <nav class="desktop-nav" aria-label="主导航">
         ${nav.map(([path, label]) => `<button data-nav="${path}" class="${active === path ? "active" : ""}">${label}</button>`).join("")}
       </nav>
@@ -289,17 +380,6 @@ function shell(content, activePath = currentPath()) {
         </details>
       </div>
     </header>
-    <section class="control-statusbar" aria-label="系统状态">
-      <div class="statusbar-brand"><i class="live-dot ${status.status === "ONLINE" ? "online" : ""}"></i><span><strong>${escapeHtml(status.displayName ?? "ESP32-S3")}</strong><small>${status.status === "ONLINE" ? "设备在线" : status.status === "UNBOUND" ? "尚未绑定" : "设备离线"}</small></span></div>
-      <div class="statusbar-signals">
-        <span>${icon("wifi", 15)}<i><b>网络</b><small>${escapeHtml(status.wifi ?? "检查中")}</small></i></span>
-        <span>${icon("printer", 15)}<i><b>打印机</b><small>${escapeHtml(printerStatus)}</small></i></span>
-      </div>
-      <div class="statusbar-switches">
-        <label><span><b>语音总控</b><small>${ui.voiceEnabled ? "已开启" : "已关闭"}</small></span><input type="checkbox" data-global-voice ${ui.voiceEnabled ? "checked" : ""}><i></i></label>
-        <label><span><b>自动打印</b><small>默认关闭</small></span><input type="checkbox" data-auto-print ${ui.autoPrint ? "checked" : ""}><i></i></label>
-      </div>
-    </section>
     <main class="hub-main">${content}</main>
     <nav class="mobile-nav" aria-label="移动端导航">
       ${mobileNav.map(([path, label, iconName]) => `<button data-nav="${path}" class="${active === path ? "active" : ""}">${icon(iconName, 19)}<span>${label}</span></button>`).join("")}
@@ -487,9 +567,16 @@ function voiceIntentLabel(intent) {
     START_TURTLE_SOUP: "海龟汤",
     WRITE_LETTER: "AI 写信 · 聆听内容",
     LETTER_CONTENT: "AI 信件 · 继续聆听",
+    LETTER_REVIEW: "信件草稿待确认",
+    LETTER_CONFIRM_SEND: "正在发送信件",
+    LETTER_CANCELLED: "信件已取消",
     SEND_LETTER: "正在发送信件",
     LETTER_SENT: "信件已发送",
-    CONFIRM_PRINT: "确认打印"
+    CONFIRM_PRINT: "确认打印",
+    OPEN_IMAGE_STUDIO: "图像处理",
+    PRINT_SAVED_LETTER: "查找已保存信件",
+    TURTLE_SOUP_ANSWER: "海龟汤 · 判断",
+    TURTLE_SOUP_REVEAL: "海龟汤 · 汤底"
   }[intent] ?? "AI 助手";
 }
 
@@ -504,7 +591,7 @@ function voiceAgentPanel(aiStatus) {
     </div>
     <form class="voice-command-form" id="voice-command-form">
       <input name="transcript" maxlength="1500" value="${escapeHtml(ui.voiceTranscript)}" placeholder="也可以输入：帮我打印今日计划 / 我要给妈妈写一封信" required>
-      <button class="primary-button" ${ui.voiceProcessing ? "disabled" : ""}>让 MIMO 理解 ${icon("arrow", 15)}</button>
+      <button class="primary-button" ${ui.voiceProcessing ? "disabled" : ""}>让小P理解 ${icon("arrow", 15)}</button>
     </form>
     <div class="voice-examples">${["帮我打印今日计划", "把这些单词打印出来", "我要给妈妈写一封信", "最近想你了，记得照顾身体", "结束", "我要玩海龟汤"].map((text) => `<button type="button" data-voice-example="${text}">${text}</button>`).join("")}</div>
     ${result ? `<section class="voice-ai-result">
@@ -512,7 +599,7 @@ function voiceAgentPanel(aiStatus) {
       ${result.warning ? `<p class="voice-warning">${escapeHtml(result.reply)}</p>` : ""}
       ${result.printable ? `<pre>${escapeHtml(result.printable.content)}</pre>` : ""}
       <footer>
-        ${["WRITE_LETTER", "LETTER_CONTENT"].includes(result.intent) ? `<span>${icon("mic", 15)}继续说正文；说 over、发送信件或结束，将自动发送数字信件。</span>` : result.intent === "LETTER_SENT" ? `<span>${icon("check", 15)}本次提交已锁定，重复结束词不会重复发送。</span>` : result.requiresConfirmation ? `<span>${icon("shield", 15)}内容尚未发送到打印机，请先检查。</span>` : `<span>${icon("check", 15)}当前操作不需要打印。</span>`}
+        ${["WRITE_LETTER", "LETTER_CONTENT"].includes(result.intent) ? `<span>${icon("mic", 15)}继续说正文；说 over、发送信件或结束后，小P会先整理草稿。</span>` : result.intent === "LETTER_SENT" ? `<span>${icon("check", 15)}本次提交已锁定，重复确认不会重复发送。</span>` : result.requiresConfirmation ? `<span>${icon("shield", 15)}内容尚未发送到打印机，请先检查。</span>` : `<span>${icon("check", 15)}当前操作不需要打印。</span>`}
         ${result.requiresConfirmation && result.printable ? `<button type="button" class="primary-button" data-confirm-ai-print ${ui.voicePrinting ? "disabled" : ""}>${icon("printer", 15)}确认并打印</button>` : ""}
       </footer>
     </section>` : ""}
@@ -526,11 +613,11 @@ async function educationView() {
   const aiStatus = await api.aiStatus().catch(() => ({ configured: false, model: "local-fallback" }));
   ui.aiProvider = aiStatus.configured ? "deepseek" : "local-fallback";
   return `<section class="page companion-page education-page" id="education-view">
-    ${pageHead("LEARN WITH MIMO", "学习空间", "提问、记住一个单词，再完成一件今天真正做得到的小事。", `<span class="streak-pill">🔥 ${state.study.streak} 天连续学习</span>`)}
+    ${pageHead("LEARN WITH 小P", "学习空间", "提问、记住一个单词，再完成一件今天真正做得到的小事。", `<span class="streak-pill">🔥 ${state.study.streak} 天连续学习</span>`)}
     ${voiceAgentPanel(aiStatus)}
     <div class="education-grid">
       <article class="tutor-card companion-card">
-        <header class="companion-card-head"><div><i>${icon("spark", 18)}</i><span><h2>MIMO Tutor</h2><small>AI 学习助手 · Online</small></span></div><button class="round-button" data-clear-chat title="清空对话">↻</button></header>
+        <header class="companion-card-head"><div><i>${icon("spark", 18)}</i><span><h2>小P Tutor</h2><small>AI 学习助手 · Online</small></span></div><button class="round-button" data-clear-chat title="清空对话">↻</button></header>
         <div class="tutor-thread" id="tutor-thread">
           ${state.messages.map((message, index) => `<div class="chat-bubble ${message.role}">${message.role === "assistant" ? '<i>M</i>' : ""}<p>${escapeHtml(message.content)}${message.role === "assistant" ? `<button type="button" data-print-message="${index}" title="打印这条回复">${icon("printer", 12)}打印</button>` : ""}</p></div>`).join("")}
         </div>
@@ -668,7 +755,7 @@ function matchPreferenceQuizView() {
           ${selectedInterests.slice(0, 6).map((item, index) => `<i style="--i:${index}">${escapeHtml(item)}</i>`).join("")}
         </div>
         <div>
-          <p class="eyebrow">AI HUB MATCH</p>
+          <p class="eyebrow">PRINTPAL MATCH</p>
           <h2>把喜欢的事，<br>变成认识彼此的开始。</h2>
           <p>这里没有考试，也没有标准答案。你每次改变兴趣，推荐都会跟着更新。</p>
         </div>
@@ -728,7 +815,7 @@ function letterDetail(letter) {
   return `<article class="letter-detail">
     <header><div>${avatar(letter.counterpart, "large")}<span><p class="eyebrow">${letter.direction === "sent" ? "TO" : "FROM"}</p><h2>${escapeHtml(letter.counterpart.displayName)}</h2><small>${escapeHtml(letter.counterpart.city)}, ${escapeHtml(letter.counterpart.country)}</small></span></div><button class="round-button">${icon("more", 18)}</button></header>
     <div class="delivery-timeline">${steps.map(([key, label, done], index) => `<span class="${done ? "done" : ""}"><i>${done ? icon("check", 12) : index + 1}</i><small>${label}</small></span>${index < 3 ? "<b></b>" : ""}`).join("")}</div>
-    <div class="letter-paper"><span class="letter-paper-head">AI HUB LETTER / ${new Date(letter.createdAt).toLocaleDateString("zh-CN")}</span><h1>${escapeHtml(letter.subject)}</h1>${assets[0] ? `<img class="letter-paper-photo" src="${assets[0].processed.previewDataUrl}" alt="Letter 附图热敏预览">` : ""}<pre>${escapeHtml(letter.body)}</pre><span class="paper-end">· · · · · · · · · · ·</span></div>
+    <div class="letter-paper"><span class="letter-paper-head">PRINTPAL LETTER / ${new Date(letter.createdAt).toLocaleDateString("zh-CN")}</span><h1>${escapeHtml(letter.subject)}</h1>${assets[0] ? `<img class="letter-paper-photo" src="${assets[0].processed.previewDataUrl}" alt="Letter 附图热敏预览">` : ""}<pre>${escapeHtml(letter.body)}</pre><span class="paper-end">· · · · · · · · · · ·</span></div>
     <footer><button class="outline-button" data-report-letter="${letter.id}">${icon("flag", 15)}举报</button><div><button class="outline-button" data-reply-letter="${letter.counterpart.id}">回复</button>${letter.printJob && letter.printJob.status !== "SUCCESS" ? `<button class="primary-button" data-print-letter="${letter.id}" data-print-job="${letter.printJob.id}">${icon("printer", 16)}发送到设备</button>` : ""}</div></footer>
   </article>`;
 }
@@ -843,11 +930,223 @@ async function deviceView() {
 }
 
 function memoryPhotoCard(photo) {
-  const sourceLabel = photo.source === "hardware" ? "硬件自动上传" : "相册上传";
+  const sourceLabel = imagePhotoSourceLabel(photo.source);
   return `<article class="memory-photo-card">
     <img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 的热敏像素预览">
     <div><strong>${escapeHtml(photo.title)}</strong><span>${sourceLabel} · ${formatTime(photo.createdAt)}</span><small>${photo.processed.width}×${photo.processed.height} · ${escapeHtml(photo.processed.processor)}</small></div>
   </article>`;
+}
+
+function imagePhotoSourceLabel(source) {
+  return {
+    camera: "电脑摄像头",
+    upload: "本地上传",
+    letter: "信件附件",
+    hardware: "硬件拍摄"
+  }[source] ?? "图片";
+}
+
+function imageStudioCard(photo, selectedId) {
+  return `<article class="image-studio-card ${photo.id === selectedId ? "selected" : ""}">
+    <button type="button" data-select-image="${photo.id}" aria-label="选择 ${escapeHtml(photo.title)}">
+      <img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 热敏像素预览">
+    </button>
+    <div>
+      <strong>${escapeHtml(photo.title)}</strong>
+      <span>${imagePhotoSourceLabel(photo.source)} · ${formatTime(photo.createdAt)}</span>
+      <small>${photo.processed.width}×${photo.processed.height}</small>
+    </div>
+  </article>`;
+}
+
+async function imageStudioView() {
+  const photos = await api.photos("print");
+  ui.imagePhotos = photos.items;
+  if (!ui.imageSelectedId || !photos.items.some((photo) => photo.id === ui.imageSelectedId)) {
+    ui.imageSelectedId = photos.items[0]?.id ?? null;
+  }
+  const selected = photos.items.find((photo) => photo.id === ui.imageSelectedId) ?? null;
+  return `<section class="page image-studio-page" id="image-studio-view">
+    ${pageHead("IMAGE STUDIO", "图像打印", "拍照或上传图片，确认预览后再打印。")}
+    <div class="image-studio-layout">
+      <article class="camera-capture-card">
+        <div class="card-head"><div><p class="eyebrow">WEB CAMERA</p><h2>电脑摄像头</h2></div><span data-camera-state>未开启</span></div>
+        <div class="camera-stage">
+          <video id="image-camera-video" autoplay muted playsinline></video>
+          <div class="camera-empty" data-camera-empty>${icon("camera", 34)}<strong>准备拍照</strong><span>首次使用需要允许摄像头权限</span></div>
+          <div class="camera-frame"></div>
+        </div>
+        <div class="camera-actions">
+          <button type="button" class="outline-button" data-start-image-camera>${icon("camera", 16)}开启摄像头</button>
+          <button type="button" class="primary-button" data-capture-image disabled>${icon("camera", 16)}拍照</button>
+        </div>
+        <canvas id="image-capture-canvas" hidden></canvas>
+      </article>
+
+      <article class="image-upload-card">
+        <div class="card-head"><div><p class="eyebrow">PIXEL SETTINGS</p><h2>像素处理</h2></div><span>384 px</span></div>
+        <div class="image-processing-fields">
+          <label>画面清晰度<select name="imagePixelSize">
+            ${[[1, "保留原始轮廓"], [2, "轻微像素感"], [4, "像素画"], [6, "强像素画"]].map(([value, label]) => `<option value="${value}" ${ui.imagePixelSize === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <label>明暗层次<select name="imageGrayscaleLevels">
+            ${[[32, "细节优先"], [16, "自然"], [8, "海报风"]].map(([value, label]) => `<option value="${value}" ${ui.imageGrayscaleLevels === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <label>对比度<select name="imageContrast">
+            ${[[0.94, "柔和"], [1.06, "自然"], [1.18, "清晰"], [1.3, "强烈"]].map(([value, label]) => `<option value="${value}" ${ui.imageContrast === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <label>照片模式<select name="imageCanny">
+            ${[[0, 0, "自然照片"], [80, 160, "细节增强"], [110, 220, "主体清晰"]].map(([low, high, label]) => `<option value="${low},${high}" ${ui.imageCannyLow === low && ui.imageCannyHigh === high ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+        </div>
+        <label class="image-upload-drop">
+          ${icon("plus", 24)}
+          <strong>上传图片</strong>
+          <span>JPG / PNG / WebP · 最大 4MB</span>
+          <input id="image-studio-file" type="file" accept="image/jpeg,image/png,image/webp">
+        </label>
+      </article>
+
+      <article class="image-preview-card">
+        <div class="card-head"><div><p class="eyebrow">THERMAL PREVIEW</p><h2>打印预览</h2></div>${selected ? `<span>${selected.processed.width}×${selected.processed.height}</span>` : ""}</div>
+        ${selected ? `<figure class="image-thermal-paper"><img src="${selected.processed.previewDataUrl}" alt="${escapeHtml(selected.title)} 打印预览"></figure>
+          <div class="image-preview-meta"><strong>${escapeHtml(selected.title)}</strong><span>${imagePhotoSourceLabel(selected.source)} · ${escapeHtml(selected.processed.processor)}</span></div>
+          <div class="image-preview-actions">
+            <button type="button" class="outline-button" data-image-to-letter="${selected.id}">${icon("letter", 16)}加入信件</button>
+            <button type="button" class="primary-button" data-print-image="${selected.id}">${icon("printer", 16)}打印照片</button>
+          </div>` : `<div class="image-preview-empty">${icon("camera", 30)}<strong>还没有图片</strong><span>拍一张或上传一张图片。</span></div>`}
+      </article>
+    </div>
+    <section class="image-library">
+      <div class="section-head"><div><p class="eyebrow">YOUR IMAGES</p><h2>最近图片</h2></div><span>${photos.items.length} 张</span></div>
+      <div class="image-studio-grid">${photos.items.length ? photos.items.map((photo) => imageStudioCard(photo, ui.imageSelectedId)).join("") : '<div class="control-empty large">处理后的图片会显示在这里。</div>'}</div>
+    </section>
+  </section>`;
+}
+
+function sleepWaveBars(wave = []) {
+  return `<div class="sleep-wave">${wave.map((height, index) => `<i style="--h:${height}px;--i:${index}"></i>`).join("")}</div>`;
+}
+
+function sleepStatusPill(value, tone = "neutral") {
+  return `<span class="sleep-pill ${tone}">${escapeHtml(value)}</span>`;
+}
+
+function sleepTimeline(report) {
+  return `<div class="sleep-timeline">${(report?.timeline ?? []).map((item, index) => `<span><i>${index + 1}</i><b>${escapeHtml(item)}</b></span>`).join("")}</div>`;
+}
+
+function sleepPrintPreview(report) {
+  const content = sleepReportPrintContent(report);
+  return `<div class="sleep-print-preview"><pre>${escapeHtml(content || "生成晨间报告后会出现可打印简报。")}</pre></div>`;
+}
+
+function sleepPreparationPanel(session) {
+  const tip = environmentTip(session.currentDb);
+  return `<div class="sleep-prep-grid">
+    <article class="sleep-card sleep-environment-card">
+      <div class="card-head"><div><p class="eyebrow">BEDTIME CHECK</p><h2>睡前准备</h2></div>${sleepStatusPill(session.environment, session.environment === "安静" ? "good" : session.environment === "偏吵" ? "warn" : "neutral")}</div>
+      <div class="sleep-metrics">
+        <span>${icon("mic", 18)}<b>麦克风</b><strong>${session.micStatus === "connected" ? "已连接" : "未连接"}</strong></span>
+        <span>${icon("spark", 18)}<b>当前音量</b><strong>${session.currentDb} dB</strong></span>
+        <span>${icon("moon", 18)}<b>环境状态</b><strong>${escapeHtml(session.environment)}</strong></span>
+      </div>
+      ${sleepWaveBars(session.wave)}
+      <p class="sleep-tip">${escapeHtml(tip)}</p>
+      <div class="sleep-fields">
+        <label>预计起床时间<input type="time" name="sleepWakeTime" value="${escapeHtml(session.wakeTime)}"></label>
+        <label class="switch sleep-switch"><input type="checkbox" name="sleepAutoPrint" ${session.autoPrint ? "checked" : ""}><span></span><b>晨间自动打印</b></label>
+      </div>
+      <div class="sleep-actions">
+        <button type="button" class="outline-button" data-sleep-action="relax">${icon("moon", 15)}两分钟放松</button>
+        <button type="button" class="primary-button" data-sleep-action="start-monitor">${icon("mic", 15)}开始睡眠监测</button>
+      </div>
+    </article>
+    <article class="sleep-card breath-card ${session.state === SLEEP_STATES.RELAXING && !session.breathPaused ? "breathing" : ""}">
+      <div class="card-head"><div><p class="eyebrow">2 MIN BREATHING</p><h2>两分钟呼吸放松</h2></div>${sleepStatusPill(session.breathPaused ? "已暂停" : session.state === SLEEP_STATES.RELAXING ? "进行中" : "准备")}</div>
+      ${(() => {
+        const phase = relaxationPhase(session.breathStartedAt);
+        return `<div class="breath-orb" style="--breath:${phase.progress}"><span>${escapeHtml(phase.label)}</span><small>${phase.secondsLeft}s</small></div>`;
+      })()}
+      <div class="breath-rhythm"><span>吸气 4 秒</span><span>停留 2 秒</span><span>呼气 6 秒</span></div>
+      <div class="sleep-actions">
+        <button type="button" class="outline-button" data-sleep-action="relax">${session.state === SLEEP_STATES.RELAXING ? "重新开始" : "开始"}</button>
+        <button type="button" class="outline-button" data-sleep-action="pause-relax" ${session.state === SLEEP_STATES.RELAXING ? "" : "disabled"}>${session.breathPaused ? "继续" : "暂停"}</button>
+        <button type="button" class="ghost-button" data-sleep-action="start-monitor">跳过</button>
+      </div>
+    </article>
+  </div>`;
+}
+
+function sleepMonitoringPanel(session) {
+  const started = session.monitorStartedAt ? new Date(session.monitorStartedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "--:--";
+  const status = session.snoreCount > 0 ? "疑似鼾声片段" : session.currentDb > 43 ? "存在持续环境声" : session.eventCount > 0 ? "检测到短暂声响" : "环境安静";
+  return `<article class="sleep-night-panel">
+    <div class="sleep-night-head"><div><p class="eyebrow">NIGHT MONITORING</p><h2>夜间监测中</h2><p>当前为单麦克风声学估算，不保存用户谈话原音。</p></div>${sleepStatusPill(status, status === "环境安静" ? "good" : "warn")}</div>
+    <div class="sleep-night-grid">
+      <span><b>监测开始</b><strong>${started}</strong></span>
+      <span><b>已监测</b><strong>${Math.floor(session.elapsedSeconds / 60)}分${session.elapsedSeconds % 60}秒</strong></span>
+      <span><b>当前分贝</b><strong>${session.currentDb} dB</strong></span>
+      <span><b>声音事件</b><strong>${session.eventCount} 次</strong></span>
+      <span><b>疑似鼾声</b><strong>${session.snoreCount} 段</strong></span>
+      <span><b>麦克风</b><strong>${session.micStatus === "connected" ? "已连接" : "未连接"}</strong></span>
+    </div>
+    ${sleepWaveBars(session.wave)}
+    <div class="sleep-demo-row">
+      ${SLEEP_SCENARIOS.map((scenario) => `<button type="button" class="${session.scenarioId === scenario.id ? "active" : ""}" data-sleep-demo="${scenario.id}">${escapeHtml(scenario.label)}</button>`).join("")}
+    </div>
+    <div class="sleep-actions">
+      <button type="button" class="outline-button" data-sleep-action="reset">${icon("arrow", 15)}回到睡前准备</button>
+      <button type="button" class="outline-button" data-sleep-action="quick-demo">${icon("clock", 15)}快速体验一晚</button>
+      <button type="button" class="primary-button" data-sleep-action="finish">${icon("check", 15)}结束监测并生成报告</button>
+    </div>
+  </article>`;
+}
+
+function sleepReportPanel(report, session) {
+  if (!report) return `<article class="sleep-card"><h2>报告生成中</h2><p>小P正在整理夜间声音事件。</p></article>`;
+  return `<div class="sleep-report-layout">
+    <article class="sleep-report-main">
+      <div class="card-head"><div><p class="eyebrow">MORNING REPORT</p><h2>晨间报告</h2></div>${sleepStatusPill(report.recovery, report.score >= 84 ? "good" : report.score >= 74 ? "neutral" : "warn")}</div>
+      <div class="sleep-score-row"><strong>${report.score}<small>分</small></strong><span><b>总睡眠时长估算</b>${formatSleepDuration(report.totalMinutes)}</span><span><b>稳定睡眠区间估算</b>${formatSleepDuration(report.stableMinutes)}</span></div>
+      <div class="sleep-report-facts">
+        <span><b>平均环境音</b><strong>${report.averageDb} dB</strong></span>
+        <span><b>夜间声音事件</b><strong>${report.eventCount} 次</strong></span>
+        <span><b>疑似鼾声片段</b><strong>${report.snoreCount} 段</strong></span>
+      </div>
+      ${sleepTimeline(report)}
+      <section class="sleep-answer-box"><h3>昨夜总结</h3><p>${escapeHtml(report.summary)}</p></section>
+      <section class="sleep-answer-box advice"><h3>今晚唯一建议</h3><p>${escapeHtml(report.suggestion)}</p></section>
+      <p class="sleep-boundary">${icon("shield", 15)}当前为单麦克风声学估算；不保存用户谈话原音，只记录音量、时间和声音事件特征；不用于医疗诊断。</p>
+    </article>
+    <aside class="sleep-report-side">
+      <div class="card-head"><div><p class="eyebrow">THERMAL BRIEF</p><h2>打印睡眠简报</h2></div>${sleepStatusPill(session.printStatus || "NOT_PRINTED")}</div>
+      ${sleepPrintPreview(report)}
+      <label class="switch sleep-switch"><input type="checkbox" name="sleepAutoPrint" ${session.autoPrint ? "checked" : ""}><span></span><b>晨间自动打印</b></label>
+      <button type="button" class="primary-button full" data-sleep-action="print" ${ui.sleepPrinting ? "disabled" : ""}>${icon("printer", 16)}${ui.sleepPrinting ? "正在发送…" : "打印睡眠简报"}</button>
+      <button type="button" class="outline-button full" data-sleep-action="reset">今晚重新开始</button>
+    </aside>
+  </div>`;
+}
+
+async function sleepView() {
+  const session = ui.sleepSession;
+  if ([SLEEP_STATES.RELAXING, SLEEP_STATES.MONITORING].includes(session.state)) ensureSleepTicker();
+  const statusSteps = [
+    [SLEEP_STATES.PREPARING, "睡前准备"],
+    [SLEEP_STATES.RELAXING, "两分钟放松"],
+    [SLEEP_STATES.MONITORING, "夜间监测"],
+    [SLEEP_STATES.REPORT_READY, "晨间报告"]
+  ];
+  const activeIndex = Math.max(0, statusSteps.findIndex(([state]) => state === session.state || (session.state === SLEEP_STATES.ANALYZING && state === SLEEP_STATES.REPORT_READY)));
+  return `<section class="page sleep-page" id="sleep-view">
+    ${pageHead("SMART SLEEP", "智能睡眠", "睡前陪你放松，夜里感知环境，醒来告诉你今晚如何睡得更好。")}
+    <div class="sleep-state-tabs">${statusSteps.map(([state, label], index) => `<span class="${index <= activeIndex ? "active" : ""}"><i>${index + 1}</i>${label}</span>`).join("")}</div>
+    ${session.state === SLEEP_STATES.MONITORING ? sleepMonitoringPanel(session)
+      : session.state === SLEEP_STATES.ANALYZING ? `<article class="sleep-analyzing">${voiceAssistantFace("thinking")}<h2>正在生成晨间报告</h2><p>小P正在把夜间声音事件整理成一张简短报告。</p></article>`
+        : session.state === SLEEP_STATES.REPORT_READY ? sleepReportPanel(ui.sleepReport, session)
+          : sleepPreparationPanel(session)}
+  </section>`;
 }
 
 async function profileView() {
@@ -891,7 +1190,7 @@ async function adminView() {
 const VOICE_STATE_COPY = {
   off: ["语音已关闭", "打开语音总控后，我会在这里等你。"],
   idle: ["待机", "准备好了，随时可以开始说话。"],
-  listening: ["聆听中", "我正在认真听你说。"],
+  listening: ["聆听中", "可以自然停顿，我会等约 4 秒再提交。"],
   recognizing: ["识别中", "正在把声音变成文字。"],
   thinking: ["思考中", "正在理解你的意图。"],
   executing: ["执行中", "正在调用系统或设备能力。"],
@@ -901,8 +1200,11 @@ const VOICE_STATE_COPY = {
 };
 
 const VOICE_EXAMPLES = [
+  "我要玩海龟汤",
   "打印刚才的对话",
   "帮我写一封信并打印",
+  "小P，帮我给小李传个话",
+  "发邮件给妈妈",
   "打印系统刚才的回答",
   "拍一张照片",
   "打开设备状态",
@@ -951,7 +1253,7 @@ function conversationCard(conversation, { active = false } = {}) {
   return `<article class="voice-conversation-card ${active ? "active" : ""}">
     <header><span><i>${conversation.source === "microphone" ? icon("mic", 14) : icon("edit", 14)}</i><b>${escapeHtml(conversation.intent)}</b></span><time>${formatTime(conversation.createdAt)}</time></header>
     <div class="conversation-message user"><small>你说</small><p>${escapeHtml(conversation.userText)}</p></div>
-    <div class="conversation-message assistant"><small>AI HUB</small><p>${escapeHtml(conversation.assistantText)}</p></div>
+    <div class="conversation-message assistant"><small>小P</small><p>${escapeHtml(conversation.assistantText)}</p></div>
     <div class="conversation-execution ${conversation.executionResult?.status?.toLowerCase() ?? ""}">${icon(conversation.executionResult?.status === "FAILED" ? "close" : "check", 14)}<span><b>执行结果</b><small>${escapeHtml(conversation.executionResult?.message ?? "本轮没有设备操作")}</small></span></div>
     ${conversationActions(conversation, true)}
   </article>`;
@@ -966,10 +1268,46 @@ function printJobCard(job) {
   </article>`;
 }
 
+function unifiedTurtleGame(game) {
+  if (!game) return "";
+  const history = Array.isArray(game.history) ? game.history.slice(-6) : [];
+  return `<section class="unified-turtle-game ${game.revealed ? "revealed" : ""}">
+    <header><span>${icon("spark", 16)}海龟汤进行中</span><b>${game.revealed ? "已揭晓" : "VOICE MODE"}</b></header>
+    <h3>${escapeHtml(game.title)}</h3>
+    <p>${escapeHtml(game.story)}</p>
+    <div class="unified-turtle-history">${history.length
+      ? history.map((item) => `<span><i>${escapeHtml(item.question)}</i><b>${escapeHtml(item.answer)}</b></span>`).join("")
+      : "<small>请提出第一个问题，我只会回答“是 / 不是 / 无关”。</small>"}</div>
+    ${game.revealed
+      ? `<div class="unified-turtle-truth"><strong>汤底</strong><p>${escapeHtml(game.truth)}</p></div>`
+      : `<button type="button" class="outline-button" data-turtle-reveal>揭晓真相并结束</button>`}
+  </section>`;
+}
+
+function unifiedLetterDraft(draft) {
+  if (!draft) return "";
+  const ready = draft.status === "WAITING_CONFIRMATION" || draft.status === "FAILED";
+  return `<section class="unified-letter-draft status-${escapeHtml(String(draft.status ?? "draft").toLowerCase())}">
+    <header><span>${icon("letter", 16)}语音写信草稿</span><b>${escapeHtml(draft.status ?? "DRAFT")}</b></header>
+    <div class="letter-draft-meta">
+      <span><small>收件人</small><strong>${escapeHtml(draft.recipient || "待确认")}</strong></span>
+      <span><small>主题</small><strong>${escapeHtml(draft.subject || "来自小P的一封信")}</strong></span>
+    </div>
+    ${draft.body ? `<pre>${escapeHtml(draft.body)}</pre>` : `<p class="draft-empty">小P正在等待你继续说正文。</p>`}
+    ${draft.error ? `<p class="voice-warning">${escapeHtml(draft.error)}</p>` : ""}
+    <footer>
+      <button type="button" class="primary-button" data-voice-letter-action="确认发送" ${ready ? "" : "disabled"}>${icon("check", 15)}确认发送</button>
+      <button type="button" class="outline-button" data-voice-letter-action="我再补充一点">${icon("plus", 15)}继续补充</button>
+      <button type="button" class="outline-button" data-voice-letter-action="修改内容">${icon("edit", 15)}修改内容</button>
+      <button type="button" class="ghost-button" data-voice-letter-action="取消">${icon("close", 15)}取消发送</button>
+    </footer>
+  </section>`;
+}
+
 async function unifiedControlView() {
   const data = await api.voiceBootstrap();
   applyCurrentUser(data.user);
-  ui.voiceEnabled = data.settings.voiceEnabled;
+  ui.voiceEnabled = true;
   ui.autoPrint = data.settings.autoPrint;
   ui.autoPrintMode = data.settings.autoPrintMode;
   ui.unifiedDevice = data.device;
@@ -982,7 +1320,7 @@ async function unifiedControlView() {
   const conversation = ui.unifiedConversation ?? data.conversations[0] ?? null;
   return `<section class="page unified-control-page">
     <header class="control-welcome">
-      <div><p class="eyebrow">VOICE COMMAND CENTER</p><h1>${escapeHtml(ui.currentUser.displayName)}，今天想让桌面助手做什么？</h1><p>说话、理解、执行、展示，再由你决定是否打印。</p></div>
+      <div><p class="eyebrow">PRINTPAL VOICE CENTER</p><h1>${escapeHtml(ui.currentUser.displayName)}，今天想让小P做什么？</h1><p>说话、理解、执行、展示，再由你决定是否打印。</p></div>
       ${!ui.currentUser.emailVerified ? `<div class="verification-banner">${icon("shield", 17)}<span><b>邮箱尚未验证</b><small>验证后可以安全找回账号并接收设备通知。</small></span><button data-request-verification>发送验证邮件</button></div>` : ""}
     </header>
     <article class="voice-command-stage state-${ui.voiceState}">
@@ -1002,12 +1340,14 @@ async function unifiedControlView() {
         </div>
         <div class="live-response">
           <span>${icon("spark", 16)}</span>
-          <div><small>系统回复</small><p>${escapeHtml(conversation?.assistantText || "我会先理解你的意图，再执行设备或打印操作。")}</p></div>
+          <div><small>小P回复</small><p>${escapeHtml(conversation?.assistantText || "我会先理解你的意图，再执行设备或打印操作。")}</p></div>
         </div>
         <div class="live-execution ${conversation?.executionResult?.status?.toLowerCase() ?? ""}">
           <span>${icon(conversation?.executionResult?.status === "FAILED" ? "close" : "check", 16)}</span>
           <div><small>指令执行结果</small><p>${escapeHtml(conversation?.executionResult?.message || "等待新的指令。")}</p></div>
         </div>
+        ${unifiedTurtleGame(conversation?.turtleGame)}
+        ${unifiedLetterDraft(conversation?.letterDraft)}
         ${conversationActions(conversation)}
         <form id="unified-command-form" class="unified-command-form">
           <input name="transcript" maxlength="1500" value="${escapeHtml(ui.unifiedTranscript)}" placeholder="麦克风不可用时，可以在这里输入指令" ${ui.unifiedBusy ? "disabled" : ""} required>
@@ -1016,17 +1356,43 @@ async function unifiedControlView() {
       </div>
     </article>
     <section class="voice-example-section">
-      <div class="section-head"><div><p class="eyebrow">TRY SAYING</p><h2>可以这样对我说</h2></div><div class="auto-print-config"><span>自动打印内容</span><select data-auto-print-mode ${ui.autoPrint ? "" : "disabled"}><option value="assistant" ${ui.autoPrintMode === "assistant" ? "selected" : ""}>只打印系统回复</option><option value="result" ${ui.autoPrintMode === "result" ? "selected" : ""}>只打印执行结果</option><option value="full" ${ui.autoPrintMode === "full" ? "selected" : ""}>打印完整对话</option></select></div></div>
+      <div class="section-head"><div><p class="eyebrow">TRY SAYING</p><h2>可以这样对我说</h2></div></div>
       <div class="voice-example-list">${VOICE_EXAMPLES.map((example) => `<button type="button" data-voice-example="${escapeHtml(example)}" aria-label="${escapeHtml(example)}"><span>${icon("mic", 14)}</span>${escapeHtml(example)}</button>`).join("")}</div>
     </section>
-    <div class="control-lower-grid">
-      <section><div class="section-head compact"><div><p class="eyebrow">RECENT TALKS</p><h2>最近对话</h2></div><button data-nav="/conversations">查看全部</button></div><div class="recent-control-list">${data.conversations.slice(0, 3).map((item) => conversationCard(item)).join("") || '<div class="control-empty">完成第一轮对话后会显示在这里。</div>'}</div></section>
-      <aside>
-        <div class="section-head compact"><div><p class="eyebrow">PRINT QUEUE</p><h2>最近打印任务</h2></div><button data-nav="/prints">查看全部</button></div>
-        <div class="recent-print-list">${data.printJobs.slice(0, 5).map(printJobCard).join("") || '<div class="control-empty">还没有打印任务。</div>'}</div>
-      </aside>
-    </div>
   </section>`;
+}
+
+function updateUnifiedInteractionState() {
+  if (currentPath() !== "/") return;
+  const stateCopy = VOICE_STATE_COPY[ui.voiceState] ?? VOICE_STATE_COPY.idle;
+  const stage = document.querySelector(".voice-command-stage");
+  if (stage) stage.className = `voice-command-stage state-${ui.voiceState}`;
+  const assistant = document.querySelector(".unified-assistant");
+  if (assistant) assistant.className = `unified-assistant assistant-state-${ui.voiceState}`;
+  document.querySelector(".voice-state-text h2")?.replaceChildren(stateCopy[0]);
+  document.querySelector(".voice-state-text p")?.replaceChildren(stateCopy[1]);
+  const listenButton = document.querySelector("[data-unified-listen]");
+  if (listenButton) {
+    listenButton.disabled = ui.unifiedBusy;
+    listenButton.innerHTML = `${icon(ui.voiceState === "listening" ? "pause" : "mic", 21)}<span>${ui.voiceState === "listening" ? "停止聆听" : "开始聆听"}</span>`;
+  }
+  const sessionStatus = document.querySelector(".live-panel-head > span");
+  if (sessionStatus) sessionStatus.textContent = ui.unifiedBusy ? "处理中" : ui.voiceState === "listening" ? "聆听中" : "READY";
+  const liveTranscript = document.querySelector("[data-live-transcript]");
+  if (liveTranscript && (ui.unifiedInterim || ui.unifiedTranscript)) {
+    liveTranscript.textContent = ui.unifiedInterim || ui.unifiedTranscript;
+  }
+  const form = document.querySelector("#unified-command-form");
+  const input = form?.querySelector('input[name="transcript"]');
+  const submit = form?.querySelector('button[type="submit"]');
+  if (input) {
+    input.disabled = ui.unifiedBusy;
+    if (ui.unifiedInterim || ui.unifiedTranscript) input.value = ui.unifiedInterim || ui.unifiedTranscript;
+  }
+  if (submit) {
+    submit.disabled = ui.unifiedBusy;
+    submit.innerHTML = `${ui.unifiedBusy ? "处理中…" : "发送"}${icon("arrow", 15)}`;
+  }
 }
 
 async function conversationsView() {
@@ -1076,7 +1442,7 @@ async function accountView() {
 function welcomeView() {
   return `<div class="public-welcome">
     <header><button class="hub-logo" data-nav="/welcome">${logo()}</button><div><button data-nav="/login">登录</button><button class="primary-button" data-nav="/register">免费注册</button></div></header>
-    <main><div class="welcome-copy"><p class="eyebrow">VOICE · AI · ESP32 · PRINT</p><h1>说一句话，<br>让桌面设备理解并行动。</h1><p>AI Hub OS 把语音对话、ESP32 硬件和热敏打印统一在一个安全的控制中心里。</p><div><button class="primary-button" data-nav="/register">创建账号${icon("arrow", 16)}</button><button class="outline-button" data-nav="/login">已有账号</button></div></div><div class="welcome-assistant">${voiceAssistantFace("listening")}<span>“打印系统刚才的回答”</span></div></main>
+    <main><div class="welcome-copy"><p class="eyebrow">VOICE · AI · ESP32 · PRINT</p><h1>说一句话，<br>让小P理解并行动。</h1><p>PrintPal 把语音对话、ESP32 硬件和热敏打印统一在一个安全的控制中心里。</p><div><button class="primary-button" data-nav="/register">创建账号${icon("arrow", 16)}</button><button class="outline-button" data-nav="/login">已有账号</button></div></div><div class="welcome-assistant">${voiceAssistantFace("listening")}<span>“打印系统刚才的回答”</span></div></main>
     <section>${[["mic","统一语音控制","从一个入口控制 AI、设备与打印"],["device","ESP32 联动","设备状态与动作结果清晰可见"],["printer","确认后打印","所有实体输出都经过平台任务队列"]].map(([name,title,detail])=>`<article><i>${icon(name,21)}</i><h2>${title}</h2><p>${detail}</p></article>`).join("")}</section>
   </div>`;
 }
@@ -1087,7 +1453,7 @@ function authView(type) {
   const forgot = type === "forgot-password";
   const reset = type === "reset-password";
   const resetToken = new URLSearchParams(location.search).get("token") ?? "";
-  const heading = login ? "欢迎回来。" : register ? "创建你的 AI Hub 账号。" : forgot ? "找回密码。" : "设置新密码。";
+  const heading = login ? "欢迎回来。" : register ? "创建你的 PrintPal 账号。" : forgot ? "找回密码。" : "设置新密码。";
   const description = login ? "登录后进入统一语音控制中心。" : register ? "使用邮箱和密码开始连接你的桌面设备。" : forgot ? "输入注册邮箱，我们会发送重置链接。" : "新密码至少 8 位，并同时包含字母和数字。";
   return `<div class="auth-page">
     <section class="auth-story">
@@ -1122,15 +1488,17 @@ function authView(type) {
 async function render() {
   const version = ++ui.renderVersion;
   const path = currentPath();
+  if (path !== "/images") stopImageCamera();
+  if (path !== "/sleep") stopSleepTicker();
   const titles = {
     "/": "语音控制中心", "/welcome": "欢迎", "/conversations": "对话记录", "/prints": "打印记录",
     "/device": "设备管理", "/account": "账号设置", "/login": "登录", "/register": "注册",
     "/forgot-password": "忘记密码", "/reset-password": "重置密码",
     "/community": "社区广场", "/create-post": "发布内容", "/match": "匹配中心",
     "/match/preferences": "匹配偏好", "/letter": "我的信件", "/letter/create": "写信",
-    "/profile": "个人主页"
+    "/profile": "个人主页", "/images": "图像打印", "/sleep": "智能睡眠"
   };
-  document.title = `${titles[path] ?? "AI Hub OS"} · AI Hub OS`;
+  document.title = `${titles[path] ?? "PrintPal"} · PrintPal`;
 
   if (!ui.authChecked) {
     app.innerHTML = loading();
@@ -1168,8 +1536,10 @@ async function render() {
     return;
   }
 
-  app.innerHTML = shell(loading(), path);
-  wireNavigation();
+  if (!app.querySelector(".hub-app")) {
+    app.innerHTML = shell(loading(), path);
+    wireNavigation();
+  }
   try {
     const views = {
       "/": unifiedControlView,
@@ -1183,7 +1553,9 @@ async function render() {
       "/conversations": conversationsView,
       "/prints": printsView,
       "/device": controlDeviceView,
-      "/account": accountView
+      "/account": accountView,
+      "/images": imageStudioView,
+      "/sleep": sleepView
     };
     const content = await views[path]();
     if (version !== ui.renderVersion) return;
@@ -1237,7 +1609,7 @@ function previewLetter(form) {
   letterPreviewTimer = window.setTimeout(async () => {
     const image = document.querySelector("#letter-template-image");
     if (!image || !form.isConnected) return;
-    const recipient = form.querySelector('[name="recipientId"] option:checked')?.textContent?.split(" · ")[0] ?? "AI Hub Friend";
+    const recipient = form.querySelector('[name="recipientId"] option:checked')?.textContent?.split(" · ")[0] ?? "PrintPal Friend";
     try {
       const preview = await api.previewLetterPrint({
         subject: form.querySelector('[name="subject"]')?.value || "你的主题",
@@ -1311,9 +1683,112 @@ function updateLetterAttachmentPreview(form) {
   });
 }
 
+function imageProcessingOptions() {
+  const pixelSize = Number(document.querySelector('[name="imagePixelSize"]')?.value ?? ui.imagePixelSize);
+  const grayscaleLevels = Number(document.querySelector('[name="imageGrayscaleLevels"]')?.value ?? ui.imageGrayscaleLevels);
+  const contrast = Number(document.querySelector('[name="imageContrast"]')?.value ?? ui.imageContrast);
+  const [cannyLow, cannyHigh] = String(document.querySelector('[name="imageCanny"]')?.value ?? `${ui.imageCannyLow},${ui.imageCannyHigh}`)
+    .split(",")
+    .map(Number);
+  Object.assign(ui, {
+    imagePixelSize: pixelSize,
+    imageGrayscaleLevels: grayscaleLevels,
+    imageContrast: contrast,
+    imageCannyLow: cannyLow,
+    imageCannyHigh: cannyHigh
+  });
+  return { pixelSize, grayscaleLevels, contrast, cannyLow, cannyHigh };
+}
+
+async function uploadImageStudioFile(file, source) {
+  if (!file || ui.imageBusy) return;
+  ui.imageBusy = true;
+  document.querySelectorAll("[data-capture-image], .image-upload-drop").forEach((element) => element.classList.add("busy"));
+  try {
+    const result = await api.uploadPhoto(file, {
+      source,
+      purpose: "print",
+      title: source === "camera" ? `桌面照片 ${new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : file.name,
+      ...imageProcessingOptions()
+    });
+    ui.imageSelectedId = result.photo.id;
+    stopImageCamera();
+    toast("图片已生成清晰热敏预览", "success");
+    render();
+  } catch (error) {
+    toast(`图片处理失败：${error.message}`, "error");
+  } finally {
+    ui.imageBusy = false;
+    document.querySelectorAll("[data-capture-image], .image-upload-drop").forEach((element) => element.classList.remove("busy"));
+  }
+}
+
+async function startImageCamera() {
+  const video = document.querySelector("#image-camera-video");
+  const startButton = document.querySelector("[data-start-image-camera]");
+  const captureButton = document.querySelector("[data-capture-image]");
+  const state = document.querySelector("[data-camera-state]");
+  const empty = document.querySelector("[data-camera-empty]");
+  if (!video || !navigator.mediaDevices?.getUserMedia) {
+    if (state) state.textContent = "浏览器不支持";
+    toast("当前浏览器无法访问摄像头，请改用 Chrome 或 Edge", "error");
+    return;
+  }
+  startButton.disabled = true;
+  if (state) state.textContent = "正在连接";
+  try {
+    stopImageCamera();
+    imageCameraStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "user",
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      },
+      audio: false
+    });
+    video.srcObject = imageCameraStream;
+    await video.play();
+    video.classList.add("ready");
+    empty?.classList.add("hidden");
+    captureButton.disabled = false;
+    startButton.innerHTML = `${icon("camera", 16)}重新连接`;
+    if (state) state.textContent = "摄像头已开启";
+  } catch (error) {
+    startButton.disabled = false;
+    captureButton.disabled = true;
+    const denied = ["NotAllowedError", "PermissionDeniedError"].includes(error.name);
+    if (state) state.textContent = denied ? "权限被拒绝" : "连接失败";
+    toast(denied ? "请在浏览器地址栏允许摄像头权限" : `摄像头连接失败：${error.message}`, "error");
+    return;
+  }
+  startButton.disabled = false;
+}
+
+async function captureImageCamera() {
+  const video = document.querySelector("#image-camera-video");
+  const canvas = document.querySelector("#image-capture-canvas");
+  if (!video || !canvas || !imageCameraStream || !video.videoWidth) {
+    toast("摄像头还没有准备好", "error");
+    return;
+  }
+  const width = Math.min(1600, video.videoWidth);
+  const height = Math.max(1, Math.round(width * video.videoHeight / video.videoWidth));
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { alpha: false });
+  context.drawImage(video, 0, 0, width, height);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+  if (!blob) {
+    toast("没有成功生成照片，请再拍一次", "error");
+    return;
+  }
+  const file = new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" });
+  await uploadImageStudioFile(file, "camera");
+}
+
 async function createAndMaybeSendLetter(form, intent) {
   const values = Object.fromEntries(new FormData(form));
-  const recipientName = form.querySelector('[name="recipientId"] option:checked')?.textContent?.split(" · ")[0] ?? "AI Hub Friend";
+  const recipientName = form.querySelector('[name="recipientId"] option:checked')?.textContent?.split(" · ")[0] ?? "PrintPal Friend";
   const draft = await api.createLetter({
     recipientId: values.recipientId,
     subject: values.subject,
@@ -1350,9 +1825,9 @@ async function createAndMaybeSendLetter(form, intent) {
 }
 
 function formatPrinterText(title, content) {
-  const cleanTitle = String(title ?? "AI Hub Letter").trim();
+  const cleanTitle = String(title ?? "PrintPal Letter").trim();
   const cleanContent = String(content ?? "").replace(/\r\n?/g, "\n").trim();
-  return `AI HUB OS\n${cleanTitle}\n\n${cleanContent}`;
+  return `PrintPal\n${cleanTitle}\n\n${cleanContent}`;
 }
 
 function printerLanguage(text) {
@@ -1366,7 +1841,7 @@ async function printLetterToDevice(letter, printJobId) {
       subject: letter.subject,
       body: letter.body,
       sender: letter.author?.displayName ?? "林安",
-      recipient: letter.recipientName ?? letter.recipient?.displayName ?? "AI Hub Friend",
+      recipient: letter.recipientName ?? letter.recipient?.displayName ?? "PrintPal Friend",
       date: new Date().toISOString().slice(0, 10),
       letterId: letter.id,
       ...(letter.attachment ? {
@@ -1523,6 +1998,96 @@ async function confirmAiPrint(printable = ui.voiceResult?.printable) {
   }
 }
 
+function stopSleepTicker() {
+  if (sleepTicker) {
+    window.clearInterval(sleepTicker);
+    sleepTicker = null;
+  }
+}
+
+function patchSleepSession(patch) {
+  ui.sleepSession = { ...ui.sleepSession, ...patch };
+  saveSleepState();
+}
+
+function ensureSleepTicker() {
+  if (sleepTicker || currentPath() !== "/sleep") return;
+  sleepTicker = window.setInterval(() => {
+    if (currentPath() !== "/sleep") {
+      stopSleepTicker();
+      return;
+    }
+    if (ui.sleepSession.state === SLEEP_STATES.MONITORING) {
+      ui.sleepSession = tickMonitoring(ui.sleepSession);
+      saveSleepState();
+      render();
+    } else if (ui.sleepSession.state === SLEEP_STATES.RELAXING && !ui.sleepSession.breathPaused) {
+      const phase = relaxationPhase(ui.sleepSession.breathStartedAt);
+      if (phase.secondsLeft <= 0) {
+        startSleepMonitoring();
+      } else render();
+    } else {
+      stopSleepTicker();
+    }
+  }, 1_000);
+}
+
+function startSleepRelaxation() {
+  patchSleepSession({
+    state: SLEEP_STATES.RELAXING,
+    breathStartedAt: new Date().toISOString(),
+    breathPaused: false
+  });
+  ensureSleepTicker();
+  render();
+}
+
+function startSleepMonitoring(scenarioId = ui.sleepSession.scenarioId) {
+  patchSleepSession({
+    state: SLEEP_STATES.MONITORING,
+    scenarioId,
+    monitorStartedAt: new Date().toISOString(),
+    elapsedSeconds: 0,
+    eventCount: 0,
+    snoreCount: 0,
+    printStatus: "NOT_PRINTED",
+    printJobId: null
+  });
+  ensureSleepTicker();
+  render();
+}
+
+async function finishSleepMonitoring(scenarioId = ui.sleepSession.scenarioId, { autoPrint = false, delayMs = 900 } = {}) {
+  stopSleepTicker();
+  patchSleepSession({ state: SLEEP_STATES.ANALYZING, scenarioId });
+  await render();
+  window.setTimeout(async () => {
+    const report = generateSleepReport(ui.sleepSession, scenarioId);
+    ui.sleepReport = report;
+    patchSleepSession({ state: SLEEP_STATES.REPORT_READY, scenarioId, printStatus: "NOT_PRINTED" });
+    saveSleepState();
+    await render();
+    if (autoPrint || ui.sleepSession.autoPrint) await printSleepReport();
+  }, delayMs);
+}
+
+async function printSleepReport() {
+  if (!ui.sleepReport || ui.sleepPrinting) return;
+  ui.sleepPrinting = true;
+  patchSleepSession({ printStatus: "SENDING" });
+  await render();
+  try {
+    const result = await printCompanionContent("我的睡眠简报", sleepReportPrintContent(ui.sleepReport), "note");
+    patchSleepSession({ printStatus: "SUCCESS", printJobId: result.jobId ?? null });
+  } catch (error) {
+    patchSleepSession({ printStatus: "FAILED" });
+    toast(`睡眠简报打印失败：${error.message}`, "error");
+  } finally {
+    ui.sleepPrinting = false;
+    await render();
+  }
+}
+
 async function processVoiceCommand(transcript) {
   const raw = String(transcript ?? "").trim();
   if (!raw || ui.voiceProcessing) return;
@@ -1637,11 +2202,10 @@ async function submitUnifiedCommand(transcript, source = "text") {
   ui.unifiedTranscript = text.slice(0, 1_500);
   ui.unifiedInterim = "";
   ui.voiceState = source === "microphone" ? "recognizing" : "thinking";
-  await render();
+  updateUnifiedInteractionState();
   if (source === "microphone") {
     ui.voiceState = "thinking";
-    document.querySelector(".voice-command-stage")?.setAttribute("class", "voice-command-stage state-thinking");
-    document.querySelector(".voice-state-text h2")?.replaceChildren("思考中");
+    updateUnifiedInteractionState();
   }
   try {
     const result = await api.voiceTurn({
@@ -1656,6 +2220,16 @@ async function submitUnifiedCommand(transcript, source = "text") {
     ui.unifiedConversation = result.conversation;
     ui.voiceMode = result.decision.mode ?? ui.voiceMode;
     ui.voiceRecipient = result.decision.recipient ?? ui.voiceRecipient;
+    if (result.decision.intent === "OPEN_IMAGE_STUDIO") {
+      toast("已打开图像处理，请拍照或上传图片", "success");
+      navigate("/images");
+      return;
+    }
+    if (result.decision.intent === "PRINT_SAVED_LETTER") {
+      toast("已打开信件列表，请选择要打印的信", "success");
+      navigate("/letter");
+      return;
+    }
     if (result.command.status === "FAILED") {
       ui.voiceState = result.command.result?.code === "DEVICE_OFFLINE" ? "offline" : "error";
     } else {
@@ -1686,57 +2260,117 @@ function startUnifiedRecognition() {
   if (!Recognition) {
     ui.voiceState = "error";
     toast("当前浏览器不支持语音识别，请使用下方文字输入", "error");
-    render();
+    updateUnifiedInteractionState();
     return;
   }
   const recognition = new Recognition();
   recognition.lang = "zh-CN";
   recognition.interimResults = true;
-  recognition.continuous = false;
+  recognition.continuous = true;
+  const silenceWindowMs = 4_000;
   let finalText = "";
   let latestText = "";
-  ui.unifiedRecognition = recognition;
+  let lastSpeechAt = 0;
+  let silenceTimer = null;
+  let restartTimer = null;
+  let stopFallbackTimer = null;
+  let manualStop = false;
+  let silenceReached = false;
+  let finalized = false;
+
+  const clearTimers = () => {
+    window.clearTimeout(silenceTimer);
+    window.clearTimeout(restartTimer);
+    window.clearTimeout(stopFallbackTimer);
+  };
+  const finish = () => {
+    if (finalized) return;
+    finalized = true;
+    clearTimers();
+    ui.unifiedRecognition = null;
+    const transcript = (latestText || finalText).trim();
+    ui.unifiedInterim = "";
+    if (transcript) submitUnifiedCommand(transcript, "microphone");
+    else if (ui.voiceState !== "error") {
+      ui.voiceState = "idle";
+      updateUnifiedInteractionState();
+    }
+  };
+  const requestStop = (manual = false) => {
+    if (finalized) return;
+    manualStop ||= manual;
+    try {
+      recognition.stop();
+    } catch {
+      finish();
+      return;
+    }
+    stopFallbackTimer = window.setTimeout(finish, 700);
+  };
+  const scheduleSilenceStop = () => {
+    window.clearTimeout(silenceTimer);
+    silenceTimer = window.setTimeout(() => {
+      silenceReached = true;
+      requestStop(false);
+    }, silenceWindowMs);
+  };
+  const startOrResume = () => {
+    if (finalized || manualStop || silenceReached) return;
+    try {
+      recognition.start();
+    } catch {
+      if (latestText || finalText) finish();
+      else {
+        ui.unifiedRecognition = null;
+        ui.voiceState = "error";
+        toast("无法继续聆听，请重新点击麦克风", "error");
+        updateUnifiedInteractionState();
+      }
+    }
+  };
+
+  ui.unifiedRecognition = { stop: () => requestStop(true) };
   ui.voiceState = "listening";
   ui.unifiedInterim = "";
-  render();
+  updateUnifiedInteractionState();
   recognition.addEventListener("result", (event) => {
     let interim = "";
     for (let index = event.resultIndex; index < event.results.length; index += 1) {
       const part = event.results[index][0]?.transcript ?? "";
-      if (event.results[index].isFinal) finalText += part;
+      if (event.results[index].isFinal) finalText += `${part} `;
       else interim += part;
     }
     latestText = `${finalText}${interim}`.slice(0, 1_500);
+    lastSpeechAt = Date.now();
+    scheduleSilenceStop();
     ui.unifiedInterim = latestText;
     document.querySelector("[data-live-transcript]")?.replaceChildren(ui.unifiedInterim || "我正在听…");
   });
   recognition.addEventListener("error", (event) => {
+    if (["no-speech", "aborted"].includes(event.error) && !manualStop && !silenceReached) return;
+    if (event.error === "aborted" && manualStop) {
+      finish();
+      return;
+    }
+    finalized = true;
+    clearTimers();
     ui.unifiedRecognition = null;
     ui.voiceState = "error";
     const message = event.error === "not-allowed"
       ? "麦克风权限被拒绝。请在浏览器地址栏允许麦克风，或使用文字输入。"
       : "这次没有听清，请重新说一次。";
     toast(message, "error");
-    render();
+    updateUnifiedInteractionState();
   });
   recognition.addEventListener("end", () => {
-    ui.unifiedRecognition = null;
-    const transcript = (finalText || latestText).trim();
-    ui.unifiedInterim = "";
-    if (transcript) submitUnifiedCommand(transcript, "microphone");
-    else if (ui.voiceState !== "error") {
-      ui.voiceState = "idle";
-      render();
+    if (finalized) return;
+    if (manualStop || silenceReached || (lastSpeechAt && Date.now() - lastSpeechAt >= silenceWindowMs)) {
+      finish();
+      return;
     }
+    restartTimer = window.setTimeout(startOrResume, 120);
   });
-  try {
-    recognition.start();
-  } catch {
-    ui.unifiedRecognition = null;
-    ui.voiceState = "error";
-    toast("无法启动麦克风，请检查浏览器权限", "error");
-    render();
-  }
+  startOrResume();
 }
 
 async function createUnifiedPrint(conversationId, target) {
@@ -1779,49 +2413,29 @@ function wire() {
     submitUnifiedCommand(transcript, "text");
   });
   document.querySelector("[data-unified-listen]")?.addEventListener("click", startUnifiedRecognition);
+  document.querySelector("[data-turtle-reveal]")?.addEventListener("click", () => {
+    submitUnifiedCommand("揭晓真相", "text");
+  });
+  document.querySelectorAll("[data-voice-letter-action]").forEach((element) => element.addEventListener("click", () => {
+    if (element.disabled) return;
+    const action = element.dataset.voiceLetterAction;
+    if (action === "修改内容") {
+      const input = document.querySelector('#unified-command-form input[name="transcript"]');
+      if (input) {
+        input.value = "例如：把最后一句删掉 / 不是明天，是后天 / 收件人改成小李";
+        input.focus();
+        input.select();
+      }
+      return;
+    }
+    submitUnifiedCommand(action, "text");
+  }));
   document.querySelectorAll("[data-voice-example]").forEach((element) => element.addEventListener("click", () => {
     const input = document.querySelector('#unified-command-form input[name="transcript"]');
     if (!input) return;
     input.value = element.dataset.voiceExample;
     input.focus();
   }));
-  document.querySelector("[data-global-voice]")?.addEventListener("change", async (event) => {
-    const enabled = event.currentTarget.checked;
-    event.currentTarget.disabled = true;
-    try {
-      const result = await api.updateVoiceSettings({ voiceEnabled: enabled });
-      ui.voiceEnabled = result.settings.voiceEnabled;
-      ui.voiceState = enabled ? "idle" : "off";
-      if (!enabled && ui.unifiedRecognition) ui.unifiedRecognition.stop();
-      toast(enabled ? "语音总控已开启" : "语音总控已关闭", "success");
-      render();
-    } catch (error) {
-      event.currentTarget.checked = !enabled;
-      event.currentTarget.disabled = false;
-      toast(error.message, "error");
-    }
-  });
-  document.querySelector("[data-auto-print]")?.addEventListener("change", async (event) => {
-    const enabled = event.currentTarget.checked;
-    event.currentTarget.disabled = true;
-    try {
-      const result = await api.updateVoiceSettings({ autoPrint: enabled });
-      ui.autoPrint = result.settings.autoPrint;
-      toast(enabled ? "自动打印已开启" : "自动打印已关闭", "success");
-      render();
-    } catch (error) {
-      event.currentTarget.checked = !enabled;
-      event.currentTarget.disabled = false;
-      toast(error.message, "error");
-    }
-  });
-  document.querySelector("[data-auto-print-mode]")?.addEventListener("change", async (event) => {
-    try {
-      const result = await api.updateVoiceSettings({ autoPrintMode: event.currentTarget.value });
-      ui.autoPrintMode = result.settings.autoPrintMode;
-      toast("自动打印范围已更新", "success");
-    } catch (error) { toast(error.message, "error"); }
-  });
   document.querySelectorAll("[data-print-conversation]").forEach((element) => element.addEventListener("click", () => {
     createUnifiedPrint(element.dataset.printConversation, element.dataset.printTarget);
   }));
@@ -1835,6 +2449,41 @@ function wire() {
     } catch (error) {
       element.disabled = false;
       toast(error.message, "error");
+    }
+  }));
+  document.querySelectorAll('[name="sleepWakeTime"]').forEach((element) => element.addEventListener("change", () => {
+    patchSleepSession({ wakeTime: element.value || ui.sleepSession.wakeTime });
+  }));
+  document.querySelectorAll('[name="sleepAutoPrint"]').forEach((element) => element.addEventListener("change", () => {
+    patchSleepSession({ autoPrint: element.checked });
+    toast(element.checked ? "已开启晨间自动打印" : "已关闭晨间自动打印");
+    render();
+  }));
+  document.querySelectorAll("[data-sleep-demo]").forEach((element) => element.addEventListener("click", () => {
+    patchSleepSession({ scenarioId: element.dataset.sleepDemo });
+    if (ui.sleepSession.state === SLEEP_STATES.MONITORING) {
+      ui.sleepSession = tickMonitoring(ui.sleepSession);
+      saveSleepState();
+    }
+    render();
+  }));
+  document.querySelectorAll("[data-sleep-action]").forEach((element) => element.addEventListener("click", async () => {
+    const action = element.dataset.sleepAction;
+    if (action === "relax") return startSleepRelaxation();
+    if (action === "pause-relax") {
+      patchSleepSession({ breathPaused: !ui.sleepSession.breathPaused });
+      ensureSleepTicker();
+      return render();
+    }
+    if (action === "start-monitor") return startSleepMonitoring();
+    if (action === "quick-demo") return finishSleepMonitoring(ui.sleepSession.scenarioId, { delayMs: 1_200 });
+    if (action === "finish") return finishSleepMonitoring(ui.sleepSession.scenarioId, { delayMs: 900 });
+    if (action === "print") return printSleepReport();
+    if (action === "reset") {
+      stopSleepTicker();
+      ui.sleepSession = createSleepSession({ wakeTime: ui.sleepSession.wakeTime, autoPrint: ui.sleepSession.autoPrint });
+      saveSleepState();
+      return render();
     }
   }));
   document.querySelectorAll("[data-request-verification]").forEach((element) => element.addEventListener("click", async () => {
@@ -2040,7 +2689,7 @@ function wire() {
   document.querySelector("[data-confirm-ai-print]")?.addEventListener("click", () => confirmAiPrint());
   document.querySelectorAll("[data-print-message]").forEach((button) => button.addEventListener("click", () => {
     const message = companionStore.getState().messages[Number(button.dataset.printMessage)];
-    if (message) stagePrintable("chat", "MIMO 学习对话", message.content, {}, "这条 AI 回复已经适配为 384px 对话卡，请确认后打印。");
+    if (message) stagePrintable("chat", "小P 学习对话", message.content, {}, "这条 AI 回复已经适配为 384px 对话卡，请确认后打印。");
   }));
   document.querySelector("[data-clear-chat]")?.addEventListener("click", () => {
     companionStore.dispatch({ type: "messages.clear" });
@@ -2257,6 +2906,31 @@ function wire() {
     toast("已减少类似推荐");
     render();
   }));
+  document.querySelectorAll('[name="imagePixelSize"], [name="imageGrayscaleLevels"], [name="imageContrast"], [name="imageCanny"]').forEach((element) => {
+    element.addEventListener("change", imageProcessingOptions);
+  });
+  document.querySelector("[data-start-image-camera]")?.addEventListener("click", startImageCamera);
+  document.querySelector("[data-capture-image]")?.addEventListener("click", captureImageCamera);
+  document.querySelector("#image-studio-file")?.addEventListener("change", async (event) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    await uploadImageStudioFile(file, "upload");
+  });
+  document.querySelectorAll("[data-select-image]").forEach((element) => element.addEventListener("click", () => {
+    ui.imageSelectedId = element.dataset.selectImage;
+    render();
+  }));
+  document.querySelectorAll("[data-image-to-letter]").forEach((element) => element.addEventListener("click", () => {
+    const photo = ui.imagePhotos.find((item) => item.id === element.dataset.imageToLetter);
+    if (!photo) return;
+    ui.letterAttachment = photo;
+    toast("图片已加入信件", "success");
+    navigate("/letter/create");
+  }));
+  document.querySelectorAll("[data-print-image]").forEach((element) => element.addEventListener("click", () => {
+    const photo = ui.imagePhotos.find((item) => item.id === element.dataset.printImage);
+    if (photo) showPhotoPrintConfirm(photo);
+  }));
   document.querySelector("#memory-photo-input")?.addEventListener("change", async (event) => {
     const file = event.currentTarget.files?.[0];
     if (!file) return;
@@ -2293,7 +2967,7 @@ function wire() {
     const file = event.currentTarget.files?.[0];
     if (!file || !letterForm) return;
     try {
-      const result = await api.uploadPhoto(file, { source: "upload", purpose: "letter", title: file.name });
+      const result = await api.uploadPhoto(file, { source: "letter", purpose: "letter", title: file.name });
       ui.letterAttachment = result.photo;
       updateLetterAttachmentPreview(letterForm);
       previewLetter(letterForm);

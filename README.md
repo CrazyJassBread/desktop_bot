@@ -1,4 +1,4 @@
-# AI Hub OS · Voice Control + Community + Physical Letter
+# PrintPal · Voice Control + Community + Physical Letter
 
 统一语音控制、用户社区、AI Agent、ESP32-S3 和热敏打印设备组成的桌面陪伴生态 MVP。
 
@@ -106,7 +106,7 @@ python -m app test  # Vision 实时测试窗口
 - `8081`：ESP32-S3 麦克风 TCP PCM
 - `8082`：ESP32-S3 图像 HTTP 上传
 - `8090`：desktop_bot HTTP/WebSocket API
-- `18000`：AI Hub OS Web MVP
+- `18000`：PrintPal Web MVP
 
 ## 目录
 

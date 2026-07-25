@@ -213,6 +213,8 @@ test("companion learning, play and life endpoints are interactive", async () => 
       body: JSON.stringify({ question: "是 AI 设备自己打印的吗？" })
     }).then((response) => response.json());
     assert.equal(turtle.verdict, "YES");
+    assert.equal(turtle.answer, "是");
+    assert.equal(turtle.truth, null);
 
     const turtleGame = await fetch(`${baseUrl}/games/turtle-soup/start`, {
       method: "POST",
@@ -220,18 +222,28 @@ test("companion learning, play and life endpoints are interactive", async () => 
       body: JSON.stringify({ theme: "AI 桌面打印机" })
     }).then((response) => response.json());
     assert.match(turtleGame.story, /。|纸|打印|AI/);
-    assert.ok(turtleGame.truth.length > 10);
+    assert.equal(turtleGame.truth, null);
 
     const turtleRound = await fetch(`${baseUrl}/games/turtle-soup/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         question: "是定时任务自动打印的吗？",
-        story: turtleGame,
+        sessionId: turtleGame.id,
         history: []
       })
     }).then((response) => response.json());
-    assert.ok(["YES", "CLOSE"].includes(turtleRound.verdict));
+    assert.equal(turtleRound.verdict, "YES");
+    assert.equal(turtleRound.answer, "是");
+    assert.equal(turtleRound.truth, null);
+
+    const reveal = await fetch(`${baseUrl}/games/turtle-soup/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: "揭晓真相", sessionId: turtleGame.id })
+    }).then((response) => response.json());
+    assert.equal(reveal.verdict, "REVEAL");
+    assert.ok(reveal.truth.length > 10);
 
     const ocr = await fetch(`${baseUrl}/ai/ocr`, {
       method: "POST",
@@ -279,6 +291,30 @@ test("photo uploads create thermal album assets usable by Letters", async () => 
     const album = await fetch(`${baseUrl}/photos`).then((response) => response.json());
     assert.ok(album.items.some((item) => item.id === uploaded.photo.id));
 
+    const printForm = new FormData();
+    printForm.set("source", "camera");
+    printForm.set("purpose", "print");
+    printForm.set("pixelSize", "4");
+    printForm.set("grayscaleLevels", "8");
+    printForm.set("contrast", "1");
+    printForm.set("cannyLow", "80");
+    printForm.set("cannyHigh", "160");
+    printForm.set("image", new Blob([png], { type: "image/png" }), "camera.png");
+    const printableResponse = await fetch(`${baseUrl}/photos`, {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: printForm
+    });
+    const printable = await printableResponse.json();
+    assert.equal(printableResponse.status, 201);
+    assert.equal(printable.photo.source, "camera");
+    assert.equal(printable.photo.processed.profile, "print");
+    assert.equal(printable.photo.processed.width, 384);
+    assert.equal(printable.photo.processed.processing.pixelSize, 4);
+    assert.equal(printable.photo.processed.processing.grayscaleLevels, 8);
+    assert.equal(printable.photo.processed.processing.cannyLow, 80);
+    assert.equal(printable.photo.processed.processing.cannyHigh, 160);
+
     const draft = await fetch(`${baseUrl}/letters`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
@@ -316,6 +352,60 @@ test("AI orchestrator requires confirmation before every print action", async ()
     assert.equal(confirmed.intent, "CONFIRM_PRINT");
     assert.equal(confirmed.requiresConfirmation, false);
     assert.equal(confirmed.executeConfirmedPrint, true);
+
+    const todo = await fetch(`${baseUrl}/ai/orchestrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "今天我要去超市买东西，下午写论文，晚上给朋友发邮件。" })
+    }).then((response) => response.json());
+    assert.equal(todo.intent, "ORGANIZE_PLAN");
+    assert.equal(todo.printable.kind, "todo");
+    assert.ok(todo.todos.length >= 3);
+
+    const fuzzyLetter = await fetch(`${baseUrl}/ai/orchestrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "我想给一个喜欢二次元的朋友写封信" })
+    }).then((response) => response.json());
+    assert.equal(fuzzyLetter.intent, "WRITE_LETTER");
+    assert.equal(fuzzyLetter.recipient, "Mina");
+    assert.equal(fuzzyLetter.recipientId, "usr-mina");
+
+    const image = await fetch(`${baseUrl}/ai/orchestrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "生成一个生日祝福卡片" })
+    }).then((response) => response.json());
+    assert.equal(image.intent, "OPEN_IMAGE_STUDIO");
+    assert.equal(image.navigation, "/images");
+    assert.ok(image.imageDescription);
+
+    const voiceGame = await fetch(`${baseUrl}/voice/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "我要玩海龟汤", mode: "default", source: "text" })
+    }).then((response) => response.json());
+    assert.equal(voiceGame.decision.intent, "START_TURTLE_SOUP");
+    assert.equal(voiceGame.decision.mode, "turtle_soup");
+    assert.equal(voiceGame.conversation.turtleGame.truth, null);
+
+    const voiceQuestion = await fetch(`${baseUrl}/voice/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "是定时任务造成的吗？", mode: "turtle_soup", source: "text" })
+    }).then((response) => response.json());
+    assert.equal(voiceQuestion.decision.intent, "TURTLE_SOUP_ANSWER");
+    assert.match(voiceQuestion.conversation.assistantText, /^(是|不是|无关)$/u);
+    assert.equal(voiceQuestion.conversation.turtleGame.truth, null);
+
+    const voiceReveal = await fetch(`${baseUrl}/voice/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "结束游戏", mode: "turtle_soup", source: "text" })
+    }).then((response) => response.json());
+    assert.equal(voiceReveal.decision.intent, "TURTLE_SOUP_REVEAL");
+    assert.equal(voiceReveal.decision.mode, "default");
+    assert.ok(voiceReveal.conversation.turtleGame.truth.length > 10);
   });
 });
 
@@ -345,6 +435,50 @@ test("voice Letter finish sends once with a stable idempotency key", async () =>
     assert.equal(first.letterId, replay.letterId);
     assert.equal(replayResponse.headers.get("idempotent-replayed"), "true");
     assert.ok(first.printJob);
+  });
+});
+
+test("unified voice letter flow asks, drafts, and only sends after confirmation", async () => {
+  await withApi(async (baseUrl) => {
+    const start = await fetch(`${baseUrl}/voice/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "小P，帮我给妈妈传个话", mode: "default", source: "text" })
+    }).then((response) => response.json());
+    assert.equal(start.decision.intent, "WRITE_LETTER");
+    assert.equal(start.decision.recipient, "妈妈");
+    assert.match(start.decision.reply, /想对妈妈说些什么/);
+    assert.equal(start.conversation.letterDraft.status, "WAITING_CONTENT");
+
+    const content = await fetch(`${baseUrl}/voice/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "嗯，就是明天下午会议可能改到三点，然后提前准备资料", mode: "letter_waiting_content", source: "text" })
+    }).then((response) => response.json());
+    assert.equal(content.decision.intent, "LETTER_CONTENT");
+    assert.equal(content.conversation.letterDraft.status, "COLLECTING_CONTENT");
+    assert.match(content.decision.reply, /这一段已经记下/);
+
+    const review = await fetch(`${baseUrl}/voice/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "还有谢谢他上次帮忙，结束", mode: "letter_collecting", source: "text" })
+    }).then((response) => response.json());
+    assert.equal(review.decision.intent, "LETTER_REVIEW");
+    assert.equal(review.conversation.letterDraft.status, "WAITING_CONFIRMATION");
+    assert.match(review.conversation.letterDraft.body, /明天下午会议可能改到三点/);
+    assert.doesNotMatch(review.conversation.letterDraft.body, /嗯|那个|就是/);
+
+    const sentBefore = await fetch(`${baseUrl}/letters?box=sent`).then((response) => response.json());
+    const confirm = await fetch(`${baseUrl}/voice/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transcript: "确认发送", mode: "letter_review", source: "text" })
+    }).then((response) => response.json());
+    assert.equal(confirm.decision.intent, "LETTER_SENT");
+    assert.equal(confirm.conversation.letterDraft.status, "SENT");
+    const sentAfter = await fetch(`${baseUrl}/letters?box=sent`).then((response) => response.json());
+    assert.equal(sentAfter.items.length, sentBefore.items.length + 1);
   });
 });
 

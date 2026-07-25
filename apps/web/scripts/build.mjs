@@ -47,14 +47,14 @@ for (const optional of ["manifest.webmanifest", "favicon.svg"]) {
 await writeFile(
   join(distRoot, "build-meta.json"),
   JSON.stringify({
-    name: "AI Hub OS Companion + Community + Letter MVP",
+    name: "PrintPal Companion + Community + Letter MVP",
     built_at: new Date().toISOString(),
     database: false,
     routes: [
       "/", "/welcome", "/login", "/register", "/forgot-password", "/reset-password",
       "/community", "/create-post", "/match", "/match/preferences",
       "/letter", "/letter/create", "/profile",
-      "/account", "/conversations", "/prints", "/device"
+      "/account", "/conversations", "/prints", "/device", "/images"
     ],
     api: "/api/v1 (in-memory repository MVP)",
     transport: "REST API + DeviceBus v1 (WebSocket/MQTT gateway ready)"

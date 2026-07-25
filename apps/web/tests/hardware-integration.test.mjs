@@ -1,10 +1,13 @@
 ﻿import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
+import sharp from "sharp";
 import { handleApiRequest } from "../api/mock-api.mjs";
 import {
   buildThermalLetterSvg,
+  paginatePlainThermalLetter,
   paginateThermalLetter,
+  renderPlainThermalLetterBatches,
   renderThermalLetterBatches,
   renderThermalLetterBitmap,
   THERMAL_BATCH_MAX_HEIGHT,
@@ -16,12 +19,15 @@ import {
   THERMAL_CONTENT_MAX_HEIGHT,
   THERMAL_CONTENT_WIDTH
 } from "../services/thermal-content.mjs";
-import { processThermalImage } from "../services/thermal-image.mjs";
+import {
+  processThermalImage,
+  renderThermalImageBatches
+} from "../services/thermal-image.mjs";
 
 test("thermal Letter uses the 384px hardware contract and packs one bit per pixel", async () => {
   const input = {
     subject: "夏夜来信",
-    body: "你好呀！\n这是一封来自 AI Hub OS 的实体信件。",
+    body: "你好呀！\n这是一封来自 PrintPal 的实体信件。",
     sender: "林安",
     recipient: "Aiko",
     letterId: "letter-test"
@@ -48,6 +54,26 @@ test("long thermal Letters are split into bounded sequential batches", async () 
   assert.ok(rendered.batches.length > 1);
   assert.ok(rendered.batches.every((batch) => batch.height <= THERMAL_BATCH_MAX_HEIGHT));
   assert.equal(rendered.batches.reduce((height, batch) => height + batch.height, 0), rendered.height);
+});
+
+test("plain thermal Letters use receipt-style fields and support 58mm and 80mm paper", async () => {
+  const input = {
+    subject: "感谢信",
+    body: "谢谢你今天帮我检查打印机，也谢谢你一直认真听我说话。".repeat(18),
+    sender: "林安",
+    recipient: "Mina",
+    date: "2026-07-25"
+  };
+  const fiftyEight = paginatePlainThermalLetter({ ...input, paper: "58mm" });
+  assert.equal(fiftyEight.width, 384);
+  assert.match(fiftyEight.pages[0].svg, /收件人：Mina/);
+  assert.match(fiftyEight.pages[0].svg, /正文：/);
+  assert.match(fiftyEight.pages[0].svg, /署名：林安/);
+
+  const eighty = await renderPlainThermalLetterBatches({ ...input, paper: "80mm" }, { rotate180: false });
+  assert.equal(eighty.width, 576);
+  assert.ok(eighty.batches.every((batch) => batch.height <= THERMAL_BATCH_MAX_HEIGHT));
+  assert.ok(eighty.batches.every((batch) => batch.bitmap.length === Math.ceil(batch.width / 8) * batch.height));
 });
 
 test("unbroken English is hard-wrapped inside the 384px printable area", () => {
@@ -102,6 +128,65 @@ test("Letter photos are processed as bounded thermal pixel attachments", async (
   }, { rotate180: false });
   assert.ok(rendered.batches.every((batch) => batch.width === 384));
   assert.ok(rendered.batches.every((batch) => batch.height <= THERMAL_BATCH_MAX_HEIGHT));
+});
+
+test("camera and uploaded photos become printable 384px pixel batches", async () => {
+  const source = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420">
+    <defs><linearGradient id="sky" x2="1" y2="1"><stop stop-color="#f5e5c8"/><stop offset="1" stop-color="#4a6982"/></linearGradient></defs>
+    <rect width="640" height="420" fill="url(#sky)"/>
+    <circle cx="205" cy="165" r="88" fill="#d9b18c"/>
+    <path d="M120 400c22-110 150-128 210 0" fill="#355064"/>
+    <circle cx="175" cy="154" r="9" fill="#222"/><circle cx="235" cy="154" r="9" fill="#222"/>
+    <path d="M170 205q35 25 70 0" fill="none" stroke="#222" stroke-width="8"/>
+    <rect x="390" y="95" width="180" height="210" rx="18" fill="#efe6d8"/>
+    <path d="M420 140h120M420 180h90M420 220h120M420 260h75" stroke="#3a4550" stroke-width="12"/>
+  </svg>`);
+  const photo = await processThermalImage(source, {
+    profile: "print",
+    pixelSize: 4,
+    grayscaleLevels: 8,
+    contrast: 1,
+    cannyLow: 80,
+    cannyHigh: 160
+  });
+  assert.equal(photo.width, 384);
+  assert.ok(photo.height <= 752);
+  assert.equal(photo.processing.pixelSize, 4);
+  assert.equal(photo.processing.grayscaleLevels, 8);
+  assert.equal(photo.processing.cannyLow, 80);
+  assert.equal(photo.processing.cannyHigh, 160);
+  assert.equal(photo.processor, "thermal-image-photo-dither-v2");
+  assert.equal(photo.processing.dither, "serpentine-floyd-steinberg");
+  assert.match(photo.previewDataUrl, /^data:image\/png;base64,/);
+
+  const preview = Buffer.from(photo.previewDataUrl.split(",")[1], "base64");
+  const { data: previewPixels, info: previewInfo } = await sharp(preview)
+    .greyscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const darkPixels = previewPixels.reduce((total, value) => total + Number(value < 128), 0);
+  const darkRatio = darkPixels / previewPixels.length;
+  assert.ok(darkRatio > 0.08 && darkRatio < 0.75);
+  const rowSignatures = new Set();
+  for (let y = 16; y < previewInfo.height - 16; y += 1) {
+    let signature = 2166136261;
+    for (let x = 0; x < previewInfo.width; x += 1) {
+      signature ^= previewPixels[y * previewInfo.width + x];
+      signature = Math.imul(signature, 16777619);
+    }
+    rowSignatures.add(signature >>> 0);
+  }
+  const contentRows = previewInfo.height - 32;
+  assert.ok(rowSignatures.size > contentRows / (photo.processing.pixelSize * 2));
+
+  const rendered = await renderThermalImageBatches(photo.previewDataUrl, {
+    rotate180: false,
+    maxBatchHeight: 256
+  });
+  assert.equal(rendered.width, 384);
+  assert.ok(rendered.batches.length >= 1);
+  assert.ok(rendered.batches.every((batch) => batch.height <= 256));
+  assert.ok(rendered.batches.every((batch) => batch.bitmap.byteLength === 48 * batch.height));
 });
 
 test("Letter printer feeds, sends bounded batches and replays idempotently", async () => {

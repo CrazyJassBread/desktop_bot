@@ -4,7 +4,7 @@ import { resolveDeviceTransition } from "./services/companion-store.js";
 const bus = new DeviceBus("mimo-simulator");
 const state = {
   id: "mimo-desk-01",
-  name: "MIMO One",
+  name: "小P",
   connected: true,
   mode: "idle",
   power: "on",
@@ -81,15 +81,15 @@ function capturePhoto() {
 function printJob(job = {}) {
   transition("print");
   const receipt = document.querySelector("#receipt");
-  document.querySelector("#receipt-content").textContent = job.content || "HELLO FROM MIMO\n设备通信测试成功";
+  document.querySelector("#receipt-content").textContent = job.content || "HELLO FROM PRINTPAL\n设备通信测试成功";
   document.querySelector("#printer-status").textContent = "PRINTING";
   receipt.classList.remove("printing");
   requestAnimationFrame(() => receipt.classList.add("printing"));
-  log("printer", `Printing ${job.title || "MIMO Test"}`);
+  log("printer", `Printing ${job.title || "PrintPal Test"}`);
   setTimeout(() => {
     document.querySelector("#printer-status").textContent = "DONE";
     transition("complete");
-    bus.send("printer.completed", { jobId: job.id, title: job.title || "MIMO Test", state: { ...state } });
+    bus.send("printer.completed", { jobId: job.id, title: job.title || "PrintPal Test", state: { ...state } });
     report();
   }, 1_100);
 }
@@ -141,7 +141,7 @@ document.querySelectorAll("[data-command]").forEach((button) => {
   button.addEventListener("click", () => {
     const value = button.dataset.command;
     if (value === "photo") return capturePhoto();
-    if (value === "print") return printJob({ title: "Local Test", content: "MIMO ONE\nLOCAL PRINT TEST\n✓ Printer ready" });
+    if (value === "print") return printJob({ title: "Local Test", content: "PRINTPAL\nLOCAL PRINT TEST\n✓ Printer ready" });
     const event = value === "wake" ? "wake" : value === "listen" ? "listen" : value === "game" ? "game" : value;
     transition(event);
     log("local", `${value} button pressed`);
@@ -174,6 +174,6 @@ bus.onMessage((message) => {
 });
 
 render();
-log("boot", `MIMO firmware ${state.firmware} ready`);
+log("boot", `小P firmware ${state.firmware} ready`);
 report("simulator.hello");
 setInterval(() => report("device.heartbeat", { uptime: Math.round(performance.now() / 1000) }), 5_000);

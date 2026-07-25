@@ -5,7 +5,7 @@
 | 服务 | 地址 | 用途 |
 |---|---|---|
 | AI Hub Web/API | `127.0.0.1:18000` | 前端、打印代理、感知事件网关 |
-| ESP32 HTTP | `10.76.10.141:80` | 文本打印、位图打印、走纸 |
+| ESP32 HTTP | `10.76.13.84:80` | 文本打印、位图打印、走纸 |
 | desktop_bot Audio | `0.0.0.0:8080` | 16 kHz、mono、signed 16-bit little-endian PCM |
 | desktop_bot Vision | `0.0.0.0:8081/upload` | 640×480 JPEG |
 
@@ -52,7 +52,7 @@
 服务端将信件生成 384px 黑白 SVG，光栅化为 1-bit 行优先位图，然后调用：
 
 ```http
-POST http://10.76.10.141/printer/image?width=384&height={height}
+POST http://10.76.13.84/printer/image?width=384&height={height}
 Content-Type: application/octet-stream
 ```
 

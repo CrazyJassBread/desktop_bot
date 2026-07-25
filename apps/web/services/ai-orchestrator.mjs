@@ -1,7 +1,9 @@
 import { deepSeekChat } from "./deepseek-client.mjs";
 
 const PRINT_CONFIRMATION = /^(打印|开始打印|确认打印|可以打印|帮我打印)$/u;
-const LETTER_FINISH = /(?:\bover\b|确认发送信件|发送信件|寄出信件|结束写信|结束)[\s，,。.!！?？;；]*$/iu;
+const LETTER_FINISH = /(?:\bover\b|发送信件|帮我整理一下|写好了|可以了|就这些|说完了|结束写信|结束)[\s，,。.!！?？;；]*$/iu;
+const LETTER_CONFIRMATION = /^(确认发送|可以发|就这样发|发送吧|确认|发吧|可以发送|按这个版本发送)$/u;
+const LETTER_CANCEL = /^(取消|不要发了|退出写信|取消发送)$/u;
 
 function cleanText(value, max = 1_500) {
   return String(value ?? "").replace(/\r\n?/g, "\n").trim().slice(0, max);
@@ -24,7 +26,7 @@ export function splitVoiceLetterFinish(value) {
   const text = cleanText(value, 1_500);
   const match = text.match(LETTER_FINISH);
   if (!match) return { finished: false, content: text, keyword: null };
-  const keywordMatch = match[0].match(/over|发送信件|确认发送信件|寄出信件|结束写信|结束/iu);
+  const keywordMatch = match[0].match(/over|发送信件|帮我整理一下|写好了|可以了|就这些|说完了|结束写信|结束/iu);
   return {
     finished: true,
     content: text.slice(0, match.index).trim(),
@@ -34,12 +36,20 @@ export function splitVoiceLetterFinish(value) {
 
 export function extractVoiceLetterStart(value) {
   const text = cleanText(value, 1_500);
-  const chinese = text.match(/(?:我要|我想|请|麻烦|帮我)?(?:给|向)(.{1,32}?)(?:写|寄)(?:一封)?(?:信|邮件)(?:[，,：:]?\s*(.*))?$/u);
+  const chinese = text.match(/(?:小P[，,]?\s*)?(?:我要|我想|请|麻烦|帮我)?(?:给|向|把这些话发给)(.{1,32}?)(?:写|寄|发|传|转告|留言|告诉)(?:一?封|一段话|个话)?(?:信|邮件|消息|话|留言)?(?:[，,：:]?\s*(.*))?$/u);
   if (chinese) {
     return {
       started: true,
-      recipient: cleanText(chinese[1], 32),
+      recipient: cleanText(chinese[1].replace(/^(一个|那位|这个)/u, ""), 32),
       content: cleanText(chinese[2], 1_200)
+    };
+  }
+  const relay = text.match(/(?:帮我)?(?:告诉|转告)(.{1,32}?)(?:[，,：:]?\s*(.*))?$/u);
+  if (relay) {
+    return {
+      started: true,
+      recipient: cleanText(relay[1].replace(/^(一个|那位|这个)/u, ""), 32),
+      content: cleanText(relay[2], 1_200)
     };
   }
   const english = text.match(/(?:please\s+)?(?:write|send)\s+(?:a\s+)?(?:letter|mail)\s+to\s+(.{1,32}?)(?:[,:]\s*(.*))?$/iu);
@@ -50,7 +60,7 @@ export function extractVoiceLetterStart(value) {
       content: cleanText(english[2], 1_200)
     };
   }
-  if (/(?:帮我写信|我要写一封信|开始写信)/u.test(text)) {
+  if (/(?:发邮件|帮我写信|我要写一封信|开始写信|写封信|传个话|转告一下|发一段话|留言)/u.test(text)) {
     return { started: true, recipient: null, content: "" };
   }
   return { started: false, recipient: null, content: "" };
@@ -62,12 +72,18 @@ export function fallbackIntent(transcript, context = {}) {
   const pending = context.pendingPrintable;
   const letterMode = String(context.mode ?? "").startsWith("letter");
   const letterFinish = splitVoiceLetterFinish(text);
+  if (letterMode && LETTER_CANCEL.test(text)) {
+    return { intent: "LETTER_CANCELLED", reply: "好的，已经取消这封信。", mode: "default", requiresConfirmation: false };
+  }
+  if (letterMode && LETTER_CONFIRMATION.test(text)) {
+    return { intent: "LETTER_CONFIRM_SEND", reply: "好的，正在发送这封信。", mode: "letter_sending", requiresConfirmation: false, executeSendLetter: true };
+  }
   if (letterMode && letterFinish.finished) {
     return {
-      intent: "SEND_LETTER",
-      reply: "收到结束词，正在发送这封信。",
-      requiresConfirmation: false,
-      executeSendLetter: true,
+      intent: "LETTER_REVIEW",
+      reply: "我已经整理好了。要按这个版本发送给对方吗？",
+      mode: "letter_review",
+      requiresConfirmation: true,
       finishKeyword: letterFinish.keyword,
       trailingContent: letterFinish.content
     };
@@ -79,6 +95,19 @@ export function fallbackIntent(transcript, context = {}) {
       requiresConfirmation: false,
       executeConfirmedPrint: true,
       printable: pending
+    };
+  }
+  if (/(生成|画|做|打印).*(图片|图像|像素图|动漫图|卡片|生日祝福)|动漫图片|生日祝福卡片/u.test(text)) {
+    const prompt = text
+      .replace(/^(帮我|请|麻烦|我想|我要)/u, "")
+      .replace(/(生成|画|做|打印|一张|一个|图片|图像|像素图)/gu, "")
+      .trim() || "高对比度 8-bit 像素艺术图片";
+    return {
+      intent: "OPEN_IMAGE_STUDIO",
+      reply: "已经打开图像处理。请拍照或上传图片，系统会自动像素化并生成热敏打印预览。",
+      navigation: "/images",
+      imageDescription: prompt,
+      requiresConfirmation: false
     };
   }
   if (/拍(一张)?照片|打开相机|拍照/u.test(text)) {
@@ -118,32 +147,65 @@ export function fallbackIntent(transcript, context = {}) {
     };
   }
   if (/海龟汤/u.test(text) && /(玩|开始|来一局|进入)/u.test(text)) {
-    return { intent: "START_TURTLE_SOUP", reply: "好呀，正在进入海龟汤。你可以用只能回答 YES 或 NO 的问题来寻找真相。", navigation: "/entertainment", requiresConfirmation: false };
+    return { intent: "START_TURTLE_SOUP", reply: "好呀，正在准备海龟汤。", mode: "turtle_soup", requiresConfirmation: false };
+  }
+  if (/昨天|上次|保存|草稿|历史/u.test(text) && /信/u.test(text) && /打印/u.test(text)) {
+    return {
+      intent: "PRINT_SAVED_LETTER",
+      reply: "我理解为要打印之前保存的信。请先在信件列表里确认具体信件，避免误打印。",
+      navigation: "/letter",
+      requiresConfirmation: false
+    };
+  }
+  if (/(今天|今日|上午|下午|晚上|早上).*(要|准备|需要|打算)/u.test(text) && /[，,；;。]/u.test(text)) {
+    const todos = planItems(text);
+    return {
+      intent: "ORGANIZE_PLAN",
+      reply: todos.length ? "我把今天的安排整理成 Todo List 了。" : "请告诉我今天准备做哪些事情。",
+      requiresConfirmation: false,
+      todos,
+      printable: todos.length ? printable("todo", "今日计划", [
+        "====== 今日计划 ======",
+        "",
+        `日期：${new Date().toISOString().slice(0, 10)}`,
+        "",
+        ...todos.map((item, index) => `${index + 1}. ☐ ${item.title}`),
+        "",
+        "================"
+      ].join("\n")) : null
+    };
   }
   const letterStart = extractVoiceLetterStart(text);
   if (letterStart.started && letterStart.recipient) {
     const recipient = letterStart.recipient;
-    return { intent: "WRITE_LETTER", reply: `好的，这封信写给${recipient}。我在听，请继续说你想写的内容。`, mode: "letter", recipient, requiresConfirmation: false };
+    return {
+      intent: "WRITE_LETTER",
+      reply: letterStart.content ? "我先记下这段内容，整理好后会给你确认。" : `好的，你想对${recipient}说些什么？`,
+      mode: letterStart.content ? "letter_collecting" : "letter_waiting_content",
+      recipient,
+      rawContent: letterStart.content,
+      requiresConfirmation: false
+    };
   }
   if (letterStart.started) {
-    return { intent: "WRITE_LETTER", reply: "好的，我在听。请先说收件人和想写的内容。", mode: "letter", recipient: null, requiresConfirmation: false };
+    return { intent: "WRITE_LETTER", reply: "这封信想发给谁？", mode: "letter_waiting_recipient", recipient: null, requiresConfirmation: false };
   }
   if (letterMode) {
     const recipient = cleanText(context.recipient || "对方", 32);
     const clipped = text.length >= 1_200;
-    const body = `${recipient}：\n\n${text.replace(/\b(嗯|呃|那个|就是)\b/gu, "").replace(/([，。！？])\1+/gu, "$1")}\n\n愿你一切都好。\n\n来自我`;
+    const body = `${recipient}：\n\n${text.replace(/(嗯|啊|呃|那个|就是|然后|怎么说呢)/gu, "").replace(/([，。！？])\1+/gu, "$1")}\n\n愿你一切都好。\n\n来自我`;
     return {
       intent: "LETTER_CONTENT",
-      reply: clipped ? "内容有点长了，我先帮你整理这一段。请查看后再确认打印。" : "我已经把口语内容整理成一封自然的信，请查看后再确认打印。",
-      mode: "letter_review",
+      reply: clipped ? "内容有点长了，我先帮你整理这一段。" : "好的，这一段已经记下了。你可以继续说，说“结束”后我帮你整理。",
+      mode: "letter_collecting",
       recipient,
-      requiresConfirmation: true,
+      requiresConfirmation: false,
       warning: clipped ? "VOICE_CONTENT_CLIPPED" : null,
       printable: printable("letter", `写给${recipient}的信`, body, { recipient, subject: "一封想对你说的话" })
     };
   }
   if (/打印.*(刚才|最近).*(对话|聊天)|把.*(对话|聊天).*打印/u.test(text)) {
-    const recent = (context.recentConversation ?? []).slice(-6).map((message) => `${message.role === "assistant" ? "MIMO" : "我"}：${message.content}`).join("\n\n");
+    const recent = (context.recentConversation ?? []).slice(-6).map((message) => `${message.role === "assistant" ? "小P" : "我"}：${message.content}`).join("\n\n");
     return { intent: "PRINT_CONVERSATION", reply: "我已整理最近的对话，请确认后打印。", requiresConfirmation: true, printable: printable("chat", "最近对话", recent || "目前还没有可打印的对话。") };
   }
   if (/打印.*(单词|词汇)|把.*(单词|词汇).*打印/u.test(text)) {
@@ -159,25 +221,26 @@ export function fallbackIntent(transcript, context = {}) {
     const todos = planItems(text);
     return { intent: "ORGANIZE_PLAN", reply: todos.length ? "我把计划整理成了可以完成的小步骤。" : "请告诉我今天准备做哪些事情。", requiresConfirmation: false, todos, printable: todos.length ? printable("todo", "今日计划", todos.map((item) => `[ ] ${item.time}  ${item.title}`).join("\n")) : null };
   }
-  return { intent: "CHAT", reply: `我理解到你想聊的是：“${text}”。可以继续告诉我你最想弄清楚的部分。`, requiresConfirmation: false, printable: printable("chat", "MIMO 对话", text) };
+  return { intent: "CHAT", reply: `我理解到你想聊的是：“${text}”。可以继续告诉我你最想弄清楚的部分。`, requiresConfirmation: false, printable: printable("chat", "小P 对话", text) };
 }
 
-const SYSTEM_PROMPT = `你是 AI Hub OS 的语音与打印意图路由器。你的输出必须是一个 JSON 对象，不要输出 markdown。
-可用 intent：CHAT、ORGANIZE_PLAN、PRINT_TODAY_PLAN、PRINT_CONVERSATION、PRINT_ASSISTANT_REPLY、PRINT_WORDS、WRITE_LETTER、LETTER_CONTENT、SEND_LETTER、CONFIRM_PRINT、CAMERA_CAPTURE、DEVICE_STATUS、VOLUME_UP、VOLUME_DOWN、BRIGHTNESS_UP、BRIGHTNESS_DOWN、ENTER_CHAT_MODE、EXIT_CHAT_MODE、REPRINT_LAST、UNKNOWN。
-严格安全规则：你不能直接操作打印机；涉及打印时 requiresConfirmation 必须为 true。只有当用户当前话语明确是“打印/开始打印/确认打印”，并且上下文提供 pendingPrintable 时，才返回 CONFIRM_PRINT、executeConfirmedPrint=true、requiresConfirmation=false。SEND_LETTER 只表示发送数字信件，不代表直接打印。
-JSON 字段：intent, reply, requiresConfirmation, executeConfirmedPrint, executeSendLetter, navigation, mode, recipient, warning, todos, printable。
+const SYSTEM_PROMPT = `你是 PrintPal 的语音与打印意图路由器，桌面机器人叫“小P”。你的输出必须是一个 JSON 对象，不要输出 markdown。
+可用 intent：CHAT、ORGANIZE_PLAN、PRINT_TODAY_PLAN、PRINT_CONVERSATION、PRINT_ASSISTANT_REPLY、PRINT_WORDS、WRITE_LETTER、LETTER_CONTENT、LETTER_REVIEW、LETTER_CONFIRM_SEND、LETTER_CANCELLED、CONFIRM_PRINT、OPEN_IMAGE_STUDIO、START_TURTLE_SOUP、PRINT_SAVED_LETTER、CAMERA_CAPTURE、DEVICE_STATUS、VOLUME_UP、VOLUME_DOWN、BRIGHTNESS_UP、BRIGHTNESS_DOWN、ENTER_CHAT_MODE、EXIT_CHAT_MODE、REPRINT_LAST、UNKNOWN。
+严格安全规则：你不能直接操作打印机；涉及打印时 requiresConfirmation 必须为 true。只有当用户当前话语明确是“打印/开始打印/确认打印”，并且上下文提供 pendingPrintable 时，才返回 CONFIRM_PRINT、executeConfirmedPrint=true、requiresConfirmation=false。LETTER_CONFIRM_SEND 只能在用户明确确认发送时使用。
+JSON 字段：intent, reply, requiresConfirmation, executeConfirmedPrint, executeSendLetter, navigation, mode, recipient, warning, todos, printable, imageDescription。
 printable 为 null 或 {kind,title,content,subject,recipient}；kind 只能是 chat、todo、word、story、letter、note。
-WRITE_LETTER 只进入聆听写信模式并提取 recipient；LETTER_CONTENT 需要去掉口语赘词、重复表达，整理为自然温暖的信，包含称呼、正文、祝福和署名。如果原始内容超过 1200 字，warning=VOICE_CONTENT_CLIPPED，reply 中必须包含“内容有点长了，我先帮你整理这一段。”。
-计划输出 todos 数组，每项为 {title,time}，最多 8 项。打印对话要摘要，不要超过 800 字。`;
+WRITE_LETTER 进入写信模式并尽量提取 recipient；如果缺收件人回复“这封信想发给谁？”；如果缺正文回复“好的，你想对对方说些什么？”。LETTER_CONTENT 只收集内容，不发送。结束词只返回 LETTER_REVIEW，必须再次询问是否发送。整理信件要去掉口语赘词、重复表达，保留事实和语气，不编造信息。
+计划输出 todos 数组，每项为 {title,time}，最多 8 项。打印对话要摘要，不要超过 800 字。图片、动漫图片、生日祝福卡片等需求只能返回 OPEN_IMAGE_STUDIO、navigation="/images"、imageDescription，引导用户拍照或上传图片；不要调用任何大模型生成图片。海龟汤开始请求返回 START_TURTLE_SOUP、mode="turtle_soup"。`;
 
 export async function orchestrateTranscript(transcript, context = {}) {
   const clean = cleanText(transcript, 1_500);
   if (!clean) throw new TypeError("Voice transcript is required");
   const fallback = fallbackIntent(clean, context);
   const deterministicIntents = new Set([
-    "SEND_LETTER", "CONFIRM_PRINT", "CAMERA_CAPTURE", "DEVICE_STATUS",
+    "LETTER_CONFIRM_SEND", "LETTER_CANCELLED", "CONFIRM_PRINT", "CAMERA_CAPTURE", "DEVICE_STATUS",
     "VOLUME_UP", "VOLUME_DOWN", "BRIGHTNESS_UP", "BRIGHTNESS_DOWN",
-    "ENTER_CHAT_MODE", "EXIT_CHAT_MODE", "REPRINT_LAST", "PRINT_ASSISTANT_REPLY"
+    "ENTER_CHAT_MODE", "EXIT_CHAT_MODE", "REPRINT_LAST", "PRINT_ASSISTANT_REPLY",
+    "OPEN_IMAGE_STUDIO", "START_TURTLE_SOUP"
   ]);
   if (deterministicIntents.has(fallback.intent)) {
     return { ...fallback, transcript: clean, provider: "local-rule" };
@@ -200,7 +263,7 @@ export async function orchestrateTranscript(transcript, context = {}) {
       ]
     });
     const decision = result.content && typeof result.content === "object" ? result.content : {};
-    const allowedIntents = new Set(["CHAT", "ORGANIZE_PLAN", "PRINT_TODAY_PLAN", "PRINT_CONVERSATION", "PRINT_ASSISTANT_REPLY", "PRINT_WORDS", "WRITE_LETTER", "LETTER_CONTENT", "SEND_LETTER", "CONFIRM_PRINT", "CAMERA_CAPTURE", "DEVICE_STATUS", "VOLUME_UP", "VOLUME_DOWN", "BRIGHTNESS_UP", "BRIGHTNESS_DOWN", "ENTER_CHAT_MODE", "EXIT_CHAT_MODE", "REPRINT_LAST", "UNKNOWN"]);
+    const allowedIntents = new Set(["CHAT", "ORGANIZE_PLAN", "PRINT_TODAY_PLAN", "PRINT_CONVERSATION", "PRINT_ASSISTANT_REPLY", "PRINT_WORDS", "WRITE_LETTER", "LETTER_CONTENT", "LETTER_REVIEW", "LETTER_CONFIRM_SEND", "LETTER_CANCELLED", "CONFIRM_PRINT", "OPEN_IMAGE_STUDIO", "START_TURTLE_SOUP", "PRINT_SAVED_LETTER", "CAMERA_CAPTURE", "DEVICE_STATUS", "VOLUME_UP", "VOLUME_DOWN", "BRIGHTNESS_UP", "BRIGHTNESS_DOWN", "ENTER_CHAT_MODE", "EXIT_CHAT_MODE", "REPRINT_LAST", "UNKNOWN"]);
     const explicitConfirmation = PRINT_CONFIRMATION.test(clean) && Boolean(context.pendingPrintable);
     const intent = allowedIntents.has(decision.intent) ? decision.intent : fallback.intent;
     const safeIntent = intent === "CONFIRM_PRINT" && !explicitConfirmation ? fallback.intent : intent;
@@ -212,7 +275,7 @@ export async function orchestrateTranscript(transcript, context = {}) {
     const safePrintable = candidatePrintable ? {
       ...candidatePrintable,
       kind: ["chat", "todo", "word", "story", "letter", "note"].includes(candidatePrintable.kind) ? candidatePrintable.kind : "note",
-      title: cleanText(candidatePrintable.title || "MIMO Note", 80),
+      title: cleanText(candidatePrintable.title || "PrintPal Note", 80),
       content: cleanText(candidatePrintable.content, 2_400)
     } : null;
     return {

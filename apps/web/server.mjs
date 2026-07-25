@@ -115,7 +115,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`AI Hub OS Web + API MVP running at http://${host}:${port}`);
+  console.log(`PrintPal Web + API MVP running at http://${host}:${port}`);
 });
 
 const dailyBriefingScheduler = startDailyBriefingScheduler();
