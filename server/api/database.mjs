@@ -56,6 +56,16 @@ db.exec(`
     PRIMARY KEY (user_id, friend_id),
     CHECK (user_id <> friend_id)
   );
+  CREATE TABLE IF NOT EXISTS friend_requests (
+    id TEXT PRIMARY KEY,
+    sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (sender_id <> recipient_id)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_friend_request ON friend_requests(sender_id,recipient_id) WHERE status='pending';
   CREATE TABLE IF NOT EXISTS records (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -100,6 +110,16 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('letter')),
+    actor_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    letter_id TEXT REFERENCES letters(id) ON DELETE CASCADE,
+    read_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id,created_at DESC);
 `);
 
 const seedUsers = [

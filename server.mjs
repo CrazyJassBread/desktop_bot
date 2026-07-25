@@ -4,6 +4,8 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleApiRequest } from "./server/api/api.mjs";
 import { config } from "./server/config.mjs";
+import { startPcmTcpServer } from "./server/transcription/tcp-server.mjs";
+import { startPrintWorker } from "./server/printing/worker.mjs";
 
 const appRoot = fileURLToPath(new URL("./public/", import.meta.url));
 const port = config.server.port;
@@ -62,7 +64,9 @@ const server = createServer(async (request, response) => {
       status: "ok",
       service: "paper-bridge-mvp",
       database: "sqlite",
-      backend_configured: Boolean(config.backend.baseUrl),
+      transcription_tcp: `${config.transcription.tcpHost}:${config.transcription.tcpPort}`,
+      openai_configured: Boolean(config.transcription.apiKey),
+      printer_configured: Boolean(config.printer.baseUrl),
       api: "/api/v1",
       uptime_seconds: Math.round(process.uptime()),
       request_id: requestId
@@ -121,10 +125,15 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`AI Hub OS Web + API MVP running at http://${host}:${port}`);
+  console.log(`Paper Bridge Web + API running at http://${host}:${port}`);
 });
 
+const pcmTcpServer = startPcmTcpServer();
+const printWorker = startPrintWorker();
+
 function shutdown() {
+  printWorker.stop();
+  pcmTcpServer.close();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5_000).unref();
 }

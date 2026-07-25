@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { db, hashPassword, publicUser, tokenHash, verifyPassword } from "./database.mjs";
-import { backendUrl, config } from "../config.mjs";
+import { config } from "../config.mjs";
+import { waitForTcpRecording } from "../transcription/broker.mjs";
+import { stopActiveRecording } from "../transcription/control.mjs";
 import { deepSeekChat, deepSeekConfig } from "../services/deepseek-client.mjs";
 import { buildThermalLetterSvg } from "../services/thermal-letter.mjs";
 
@@ -52,19 +54,8 @@ async function generateLetterWithAi(record, recipient, user) {
 }
 
 async function requestBackendTranscript(user, language) {
-  const endpoint = backendUrl(config.backend.transcribePath);
-  if (!endpoint) return { transcript: demoTranscripts[language], provider: "demo-device" };
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(config.backend.apiToken ? { Authorization: `Bearer ${config.backend.apiToken}` } : {}) },
-    body: JSON.stringify({ user: publicUser(user), language }),
-    signal: AbortSignal.timeout(60_000)
-  });
-  if (!response.ok) throw new Error("RECORDING_BACKEND_FAILED");
-  const payload = await response.json();
-  const transcript = String(payload.transcript || "").trim();
-  if (!transcript) throw new Error("EMPTY_TRANSCRIPT");
-  return { transcript: transcript.slice(0, 10_000), provider: payload.provider || "recording-backend" };
+  if (process.env.NODE_ENV === "test") return { transcript: demoTranscripts[language], provider: "test-device" };
+  return waitForTcpRecording({ userId: user.id, language });
 }
 
 function letterPayload(row) {
@@ -182,7 +173,54 @@ export async function handleApiRequest(request, response, requestId) {
         (SELECT COUNT(*) FROM letters l WHERE (l.sender_id=? AND l.recipient_id=u.id) OR (l.sender_id=u.id AND l.recipient_id=?)) letter_count
         FROM friendships f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.status='accepted' ORDER BY u.display_name`).all(user.id, user.id, user.id)
         .map((row) => ({ id: row.id, displayName: row.display_name, preferredLanguage: row.preferred_language, letterCount: row.letter_count }));
-      return json(response, 200, { items });
+      const incomingRequests = db.prepare(`SELECT fr.id,u.id sender_id,u.display_name,u.email,fr.created_at FROM friend_requests fr JOIN users u ON u.id=fr.sender_id WHERE fr.recipient_id=? AND fr.status='pending' ORDER BY fr.created_at DESC`).all(user.id)
+        .map((row) => ({ id: row.id, senderId: row.sender_id, displayName: row.display_name, email: row.email, createdAt: row.created_at }));
+      const outgoingRequests = db.prepare(`SELECT fr.id,u.id recipient_id,u.display_name,u.email,fr.created_at FROM friend_requests fr JOIN users u ON u.id=fr.recipient_id WHERE fr.sender_id=? AND fr.status='pending' ORDER BY fr.created_at DESC`).all(user.id)
+        .map((row) => ({ id: row.id, recipientId: row.recipient_id, displayName: row.display_name, email: row.email, createdAt: row.created_at }));
+      return json(response, 200, { items, incomingRequests, outgoingRequests });
+    }
+    if (method === "POST" && path === "/friends") {
+      const body = await readJson(request);
+      const email = String(body.email || "").trim().toLowerCase();
+      if (!email || !email.includes("@")) return problem(response, 422, "INVALID_EMAIL", "Enter a valid email address.", requestId);
+      const friend = db.prepare("SELECT * FROM users WHERE email=? COLLATE NOCASE").get(email);
+      if (!friend) return problem(response, 404, "USER_NOT_FOUND", "No account uses that email address.", requestId);
+      if (friend.id === user.id) return problem(response, 422, "CANNOT_ADD_SELF", "You cannot add yourself.", requestId);
+      const existing = db.prepare("SELECT 1 FROM friendships WHERE user_id=? AND friend_id=? AND status='accepted'").get(user.id, friend.id);
+      if (existing) return problem(response, 409, "ALREADY_FRIENDS", "This person is already in your social circle.", requestId);
+      const pending = db.prepare("SELECT 1 FROM friend_requests WHERE status='pending' AND ((sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?))").get(user.id, friend.id, friend.id, user.id);
+      if (pending) return problem(response, 409, "REQUEST_PENDING", "A friend request is already pending between these accounts.", requestId);
+      const id = `freq-${randomUUID()}`;
+      db.prepare("INSERT INTO friend_requests (id,sender_id,recipient_id,status) VALUES (?,?,?,'pending')").run(id, user.id, friend.id);
+      return json(response, 201, { request: { id, recipientId: friend.id, displayName: friend.display_name, status: "pending" } });
+    }
+    const friendRequestMatch = path.match(/^\/friend-requests\/([^/]+)\/(accept|decline)$/);
+    if (method === "POST" && friendRequestMatch) {
+      const friendRequest = db.prepare("SELECT * FROM friend_requests WHERE id=? AND recipient_id=? AND status='pending'").get(friendRequestMatch[1], user.id);
+      if (!friendRequest) return problem(response, 404, "REQUEST_NOT_FOUND", "Pending friend request not found.", requestId);
+      const decision = friendRequestMatch[2];
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("UPDATE friend_requests SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(decision === "accept" ? "accepted" : "declined", friendRequest.id);
+        if (decision === "accept") {
+          const addFriend = db.prepare("INSERT INTO friendships (user_id,friend_id,status) VALUES (?,?,'accepted') ON CONFLICT(user_id,friend_id) DO UPDATE SET status='accepted'");
+          addFriend.run(friendRequest.sender_id, friendRequest.recipient_id);
+          addFriend.run(friendRequest.recipient_id, friendRequest.sender_id);
+        }
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+      return json(response, 200, { status: decision === "accept" ? "accepted" : "declined" });
+    }
+    if (method === "GET" && path === "/notifications") {
+      const items = db.prepare(`SELECT n.id,n.type,n.letter_id,n.read_at,n.created_at,u.display_name actor_name,l.subject FROM notifications n LEFT JOIN users u ON u.id=n.actor_id LEFT JOIN letters l ON l.id=n.letter_id WHERE n.user_id=? ORDER BY n.created_at DESC LIMIT 30`).all(user.id)
+        .map((row) => ({ id: row.id, type: row.type, letterId: row.letter_id, read: Boolean(row.read_at), createdAt: row.created_at, actorName: row.actor_name, subject: row.subject }));
+      return json(response, 200, { items, unreadCount: items.filter((item) => !item.read).length });
+    }
+    const notificationReadMatch = path.match(/^\/notifications\/([^/]+)\/read$/);
+    if (method === "POST" && notificationReadMatch) {
+      const result = db.prepare("UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP) WHERE id=? AND user_id=?").run(notificationReadMatch[1], user.id);
+      if (!result.changes) return problem(response, 404, "NOT_FOUND", "Notification not found.", requestId);
+      return json(response, 200, { success: true });
     }
     if (method === "GET" && path === "/records") {
       return json(response, 200, { items: db.prepare("SELECT id,title,transcript,summary,status,created_at AS createdAt FROM records WHERE user_id=? ORDER BY created_at DESC").all(user.id) });
@@ -201,8 +239,12 @@ export async function handleApiRequest(request, response, requestId) {
         return json(response, 201, { job: { id: jobId, status: "ready", recordId, provider: result.provider } });
       } catch (error) {
         db.prepare("UPDATE recording_jobs SET status='failed',completed_at=CURRENT_TIMESTAMP WHERE id=?").run(jobId);
-        return problem(response, 502, "TRANSCRIPTION_FAILED", "The recording backend could not return a transcription.", requestId);
+        return problem(response, error.code === "TRANSCRIPTION_BUSY" ? 409 : error.code === "AUDIO_TIMEOUT" ? 408 : 502, error.code || "TRANSCRIPTION_FAILED", error.message || "The transcription could not be completed.", requestId);
       }
+    }
+    if (method === "POST" && path === "/recordings/stop") {
+      if (!stopActiveRecording(config.transcription.stopGraceMs)) return problem(response, 409, "NO_ACTIVE_RECORDING", "No PCM recording connection is active.", requestId);
+      return json(response, 202, { accepted: true, graceMs: config.transcription.stopGraceMs });
     }
     const recordingMatch = path.match(/^\/recordings\/([^/]+)$/);
     if (method === "GET" && recordingMatch) {
@@ -296,6 +338,7 @@ export async function handleApiRequest(request, response, requestId) {
       try {
         db.prepare("UPDATE letters SET status='queued',sent_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(letter.id);
         db.prepare("INSERT INTO print_jobs (id,letter_id,user_id,status) VALUES (?,?,?,'queued')").run(printJobId, letter.id, letter.recipient_id);
+        db.prepare("INSERT INTO notifications (id,user_id,type,actor_id,letter_id) VALUES (?,?,'letter',?,?)").run(`note-${randomUUID()}`, letter.recipient_id, user.id, letter.id);
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
       return json(response, 200, { letterId: letter.id, status: "queued", printJob: { id: printJobId, status: "queued", recipientId: letter.recipient_id } });

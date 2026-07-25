@@ -46,6 +46,32 @@ test("new accounts are stored and can update their language", async () => {
   });
 });
 
+test("friendship is created only after the recipient approves the request", async () => {
+  await withApi(async (base) => {
+    const register = async (displayName) => {
+      const email = `${crypto.randomUUID()}@example.com`;
+      const response = await fetch(`${base}/auth/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ displayName, email, password: "Hackathon123", preferredLanguage: "en" }) });
+      assert.equal(response.status, 201);
+      return { email, cookie: response.headers.get("set-cookie").split(";")[0] };
+    };
+    const first = await register("First User");
+    const second = await register("Second User");
+    const added = await fetch(`${base}/friends`, { method: "POST", headers: { Cookie: first.cookie, "Content-Type": "application/json" }, body: JSON.stringify({ email: second.email }) });
+    assert.equal(added.status, 201);
+    const requestId = (await added.json()).request.id;
+    const firstFriends = await (await fetch(`${base}/friends`, { headers: { Cookie: first.cookie } })).json();
+    const secondFriends = await (await fetch(`${base}/friends`, { headers: { Cookie: second.cookie } })).json();
+    assert.equal(firstFriends.items.some((friend) => friend.displayName === "Second User"), false);
+    assert.ok(secondFriends.incomingRequests.some((request) => request.id === requestId));
+    const approved = await fetch(`${base}/friend-requests/${requestId}/accept`, { method: "POST", headers: { Cookie: second.cookie, "Content-Type": "application/json" }, body: "{}" });
+    assert.equal(approved.status, 200);
+    const firstAfter = await (await fetch(`${base}/friends`, { headers: { Cookie: first.cookie } })).json();
+    const secondAfter = await (await fetch(`${base}/friends`, { headers: { Cookie: second.cookie } })).json();
+    assert.ok(firstAfter.items.some((friend) => friend.displayName === "Second User"));
+    assert.ok(secondAfter.items.some((friend) => friend.displayName === "First User"));
+  });
+});
+
 test("recording to AI letter to recipient print queue works end to end", async () => {
   await withApi(async (base) => {
     const login = async (email, password) => {
@@ -79,6 +105,11 @@ test("recording to AI letter to recipient print queue works end to end", async (
     assert.equal(sendResponse.status, 200);
     const sent = await sendResponse.json();
     assert.equal(sent.status, "queued");
+
+    const notificationsResponse = await fetch(`${base}/notifications`, authJson(recipientCookie));
+    assert.equal(notificationsResponse.status, 200);
+    const notifications = await notificationsResponse.json();
+    assert.ok(notifications.items.some((notification) => notification.letterId === sent.letterId && !notification.read));
 
     const jobsResponse = await fetch(`${base}/print-jobs`, authJson(recipientCookie));
     assert.equal(jobsResponse.status, 200);

@@ -1,100 +1,121 @@
-# Paper Bridge
+# Paper Bridge full-stack MVP
 
-Hackathon MVP for bilingual voice records, a private social circle, AI-assisted letters, and thermal-printer delivery.
+Frontend, database, TCP audio receiver, OpenAI transcription, letter generation, and thermal-printer delivery run on one computer.
 
-## Project structure
+## Structure
 
 ```text
-frontend/
-├── public/                 Browser UI and API client
+paper-bridge/
+├── public/                     Browser UI
 ├── server/
-│   ├── api/                Authentication, records, letters, print jobs
-│   ├── services/           DeepSeek and thermal-letter rendering
-│   └── config.mjs          Validated server-side configuration
-├── data/                   SQLite database and generated letter pictures
-├── tests/                  End-to-end API tests
-├── scripts/                Production build validation
-├── server.mjs              Web/API server entry point
-├── .env.example            Safe configuration template
-└── package.json
+│   ├── api/                    Login, records, letters, print jobs
+│   ├── printing/               384px bitmap transport and queue worker
+│   ├── services/               DeepSeek and thermal rendering
+│   ├── transcription/          TCP PCM receiver, WAV encoder, OpenAI client
+│   └── config.mjs              Central server configuration
+├── data/                       SQLite and generated letter PNGs
+├── tests/                      API, TCP, WAV, and printer tests
+├── scripts/                    Production build
+├── server.mjs                  HTTP and TCP entry point
+└── .env.example                Configuration template
 ```
 
 ## Run
+
+Copy `.env.example` to `.env.local`, add `OPENAI_API_KEY`, then run:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:18000`. To open it from another device on the same Wi-Fi, use the host computer's LAN address, such as `http://192.168.1.20:18000`.
+Services:
 
-Demo accounts:
+- Web and REST API: `http://device-ip:18000`
+- Raw PCM transcription input: `device-ip:8080`
+- SQLite: `data/ai-hub.sqlite`
+
+## PCM TCP protocol
+
+The ESP32 may connect before or after the browser requests a transcription. When the PCM stream ends, the recording is assigned to the oldest authenticated web request that is waiting.
+
+Each TCP connection contains exactly one utterance:
+
+```text
+sample rate: 16000 Hz
+channels: 1 (mono)
+sample type: signed 16-bit PCM
+byte order: little-endian
+container/header: none
+```
+
+The audio sender must:
+
+1. Connect to TCP port `8080`; the server accepts the audio connection even if the user has not clicked yet.
+2. Send raw PCM bytes continuously.
+3. Either close its write side when the utterance ends, or keep streaming: after speech starts, about 1.2 seconds of PCM silence automatically finalizes the utterance.
+4. Optionally read one newline-terminated JSON response before closing the socket.
+
+Success reply:
+
+```json
+{"ok":true,"transcript":"recognized text"}
+```
+
+Failure reply:
+
+```json
+{"ok":false,"code":"INVALID_PCM","message":"..."}
+```
+
+Pure PCM contains no identity or end marker. Therefore this MVP binds a completed utterance to the oldest waiting web request and uses either TCP end-of-stream or PCM silence as the boundary. The user must click “Request transcription” before that boundary. For multiple recording devices, add a versioned binary preamble containing a job ID before the PCM bytes.
+
+The server receives sockets asynchronously and permits several OpenAI requests concurrently. Worker threads are intentionally not used: network and OpenAI calls are I/O-bound, and copying audio between threads would add overhead. `TRANSCRIPTION_CONCURRENCY` limits simultaneous OpenAI calls.
+
+## OpenAI transcription
+
+Raw PCM is wrapped in-memory as a 16 kHz mono PCM WAV, then uploaded to `/v1/audio/transcriptions` as multipart form data. The default model is `gpt-4o-mini-transcribe`.
+
+Required configuration:
+
+```dotenv
+OPENAI_API_KEY=your-server-only-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe
+TRANSCRIPTION_TCP_PORT=8080
+TRANSCRIPTION_CONCURRENCY=4
+```
+
+The OpenAI key never enters browser code.
+
+## Printer protocol
+
+Letters are rendered into 384-pixel-wide 1-bit packed bitmap batches. When automatic printing is enabled, each batch is sent sequentially:
+
+```http
+POST http://ESP_IP/printer/image?width=384&height=BATCH_HEIGHT
+Content-Type: application/octet-stream
+
+<packed bitmap bytes>
+```
+
+Configuration:
+
+```dotenv
+ESP_PRINTER_BASE_URL=http://192.168.1.100
+PRINTER_AUTO_SEND=true
+PRINTER_TIMEOUT_MS=30000
+PRINTER_ROTATE_180=true
+```
+
+Keep `PRINTER_AUTO_SEND=false` until the ESP address and paper direction are confirmed. Print jobs remain queued when no printer is configured. Printing does not depend on the recipient's browser being open.
+
+## Demo accounts
 
 - `hello@aihub.local` / `Demo1234`
 - `aiko@aihub.local` / `Aiko1234`
 - `mina@aihub.local` / `Mina1234`
 - `noah@aihub.local` / `Noah1234`
-
-## Network architecture
-
-The browser always calls same-origin `/api/v1` URLs. It does not need or receive the LAN backend IP, DeepSeek key, database path, or backend token.
-
-The Node server uses `BACKEND_BASE_URL` to reach a separate backend computer or device over Wi-Fi:
-
-```text
-Browser -> http://frontend-host:18000/api/v1 -> Node app -> http://backend-host:8000
-```
-
-This avoids CORS and cross-origin cookie problems. Running the browser frontend directly on one port and calling the backend from browser JavaScript on another port is possible, but is needlessly fragile for this demo.
-
-Copy `.env.example` to `.env.local` and set:
-
-- `HOST=0.0.0.0` to accept connections from the LAN.
-- `PUBLIC_APP_URL` to the frontend computer's LAN URL.
-- `BACKEND_BASE_URL` to the backend computer's IP and port.
-- `BACKEND_API_TOKEN` if the LAN backend authenticates machine-to-machine requests.
-- `BACKEND_TRANSCRIBE_PATH` and `BACKEND_PRINT_PATH` to match the backend routes.
-- `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` for server-side AI.
-- `DATABASE_PATH` for SQLite.
-- `COOKIE_SECURE=true` only when serving through HTTPS.
-
-## Incoming-letter behavior
-
-The frontend does not send a second request when it “receives” a letter. The backend is the source of truth:
-
-1. Sender submits a letter to the backend.
-2. Backend stores the letter for both users.
-3. Backend immediately creates the recipient's print job.
-4. The printer service reads or receives that job and reports its status to the backend.
-5. The recipient UI refreshes letters and print jobs every 10 seconds while the Letters screen is open.
-
-Polling is intentionally used for the hackathon because it is simple and resilient. Later, Server-Sent Events are preferable to WebSockets for instant UI notifications because updates are one-way. Printing must never depend on the recipient having a browser open.
-
-## External backend contract to implement next
-
-The existing transcription adapter sends:
-
-```json
-{
-  "user": {
-    "id": "usr-id",
-    "email": "user@example.com",
-    "displayName": "User"
-  },
-  "language": "en"
-}
-```
-
-The backend should return:
-
-```json
-{
-  "transcript": "Transcribed text",
-  "provider": "device-or-model-name"
-}
-```
-
-The print adapter should eventually receive the letter ID, recipient ID, PNG bytes or protected download URL, and an idempotency key. Its exact request format should be agreed with the backend before implementation.
 
 ## Verification
 
