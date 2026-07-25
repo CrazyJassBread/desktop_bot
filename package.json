@@ -1,0 +1,19 @@
+{
+  "name": "ai-hub-os-companion-mvp",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env.local apps/web/server.mjs",
+    "start": "node --env-file-if-exists=.env.local apps/web/server.mjs",
+    "build": "node apps/web/scripts/build.mjs",
+    "test": "node apps/web/scripts/run-tests.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.7.0",
+    "sharp": "^0.35.3"
+  }
+}

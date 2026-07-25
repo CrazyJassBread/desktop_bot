@@ -1,0 +1,653 @@
+openapi: 3.1.0
+info:
+  title: AI Hardware Community API
+  version: 0.1.0
+  description: MVP 核心 API 契约骨架；Agent 与 Device 接口将在对应阶段扩展。
+  license:
+    name: Proprietary
+    identifier: LicenseRef-Proprietary
+servers:
+  - url: /api/v1
+    description: Same-origin API base; deployment domain is configured per environment.
+tags:
+  - name: Auth
+    description: 注册、登录、令牌轮换与会话安全
+  - name: Users
+    description: 用户资料、公开主页与关系
+  - name: Contents
+    description: 动态、文章、项目和 Agent 展示内容
+  - name: Social
+    description: 评论、点赞、收藏和举报
+  - name: Files
+    description: 预签名直传、扫描状态和文件生命周期
+  - name: Search
+    description: 站内全文检索与发现
+security:
+  - bearerAuth: []
+paths:
+  /auth/register:
+    post:
+      summary: 注册账号
+      tags: [Auth]
+      security: []
+      operationId: register
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResult'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /auth/login:
+    post:
+      summary: 登录账号
+      tags: [Auth]
+      security: []
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: {type: string, format: email, maxLength: 320}
+                password: {type: string, minLength: 8, maxLength: 128}
+      responses:
+        '200':
+          description: Logged in; refresh token is set by HttpOnly cookie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /auth/refresh:
+    post:
+      summary: 轮换访问令牌和刷新令牌
+      tags: [Auth]
+      security: []
+      operationId: refreshSession
+      responses:
+        '200':
+          description: Rotated tokens
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /me:
+    get:
+      summary: 获取当前用户
+      tags: [Users]
+      operationId: getMe
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      summary: 更新当前用户资料
+      tags: [Users]
+      operationId: updateMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: {type: string, minLength: 1, maxLength: 80}
+                bio: {type: [string, 'null'], maxLength: 500}
+                website_url: {type: [string, 'null'], format: uri, maxLength: 2048}
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /users/{username}:
+    get:
+      summary: 获取公开用户主页
+      tags: [Users]
+      security: []
+      operationId: getUserByUsername
+      parameters:
+        - name: username
+          in: path
+          required: true
+          schema: {type: string, minLength: 3, maxLength: 40}
+      responses:
+        '200':
+          description: Public profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicUser'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /contents:
+    get:
+      summary: 获取公开内容列表
+      tags: [Contents]
+      security: []
+      operationId: listContents
+      parameters:
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/ContentType'
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [latest, popular, relevant]
+            default: latest
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Content page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Content'}
+                  page: {$ref: '#/components/schemas/Page'}
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    post:
+      summary: 创建内容草稿
+      tags: [Contents]
+      operationId: createContent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateContentRequest'
+      responses:
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Content'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /contents/{contentId}:
+    get:
+      summary: 获取内容详情
+      tags: [Contents]
+      security: []
+      operationId: getContent
+      parameters:
+        - $ref: '#/components/parameters/ContentId'
+      responses:
+        '200':
+          description: Content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Content'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      summary: 更新内容
+      tags: [Contents]
+      operationId: updateContent
+      parameters:
+        - $ref: '#/components/parameters/ContentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  required: [version]
+                  properties:
+                    version: {type: integer, minimum: 1}
+                - $ref: '#/components/schemas/CreateContentRequest'
+      responses:
+        '200':
+          description: Updated content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Content'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      summary: 删除内容
+      tags: [Contents]
+      operationId: deleteContent
+      parameters:
+        - $ref: '#/components/parameters/ContentId'
+      responses:
+        '204': {description: Deleted}
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /contents/{contentId}/publish:
+    post:
+      summary: 发布内容或提交审核
+      tags: [Contents]
+      operationId: publishContent
+      parameters:
+        - $ref: '#/components/parameters/ContentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Published or submitted for review
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Content'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /contents/{contentId}/like:
+    put:
+      summary: 点赞内容
+      tags: [Social]
+      operationId: likeContent
+      parameters:
+        - $ref: '#/components/parameters/ContentId'
+      responses:
+        '200':
+          description: Current like state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [liked]
+                properties:
+                  liked: {type: boolean, const: true}
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: 取消内容点赞
+      tags: [Social]
+      operationId: unlikeContent
+      parameters:
+        - $ref: '#/components/parameters/ContentId'
+      responses:
+        '204': {description: Current state is not liked}
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /contents/{contentId}/comments:
+    get:
+      summary: 获取内容评论
+      tags: [Social]
+      security: []
+      operationId: listComments
+      parameters:
+        - $ref: '#/components/parameters/ContentId'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Comment page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Comment'}
+                  page: {$ref: '#/components/schemas/Page'}
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      summary: 创建评论
+      tags: [Social]
+      operationId: createComment
+      parameters:
+        - $ref: '#/components/parameters/ContentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: {type: string, minLength: 1, maxLength: 5000}
+                parent_id: {type: [string, 'null']}
+      responses:
+        '201':
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /files/upload-intents:
+    post:
+      summary: 创建预签名上传意图
+      tags: [Files]
+      operationId: createUploadIntent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filename, size_bytes, mime_type, purpose]
+              properties:
+                filename: {type: string, minLength: 1, maxLength: 255}
+                size_bytes: {type: integer, minimum: 1}
+                mime_type: {type: string, maxLength: 160}
+                purpose: {type: string, enum: [avatar, cover, inline, project_attachment]}
+                sha256: {type: string, pattern: '^[a-fA-F0-9]{64}$'}
+      responses:
+        '201':
+          description: Presigned upload intent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadIntent'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /files/{fileId}/complete:
+    post:
+      summary: 确认上传完成并进入扫描
+      tags: [Files]
+      operationId: completeUpload
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema: {type: string}
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Accepted for scanning
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileObject'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /search:
+    get:
+      summary: 搜索公开内容
+      tags: [Search]
+      security: []
+      operationId: search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: {type: string, minLength: 1, maxLength: 200}
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/ContentType'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Search result page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Content'}
+                  page: {$ref: '#/components/schemas/Page'}
+        '429':
+          $ref: '#/components/responses/RateLimited'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 16, maxLength: 160}
+    Cursor:
+      name: cursor
+      in: query
+      schema: {type: string, maxLength: 1000}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+    ContentId:
+      name: contentId
+      in: path
+      required: true
+      schema: {type: string}
+  schemas:
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password, username, display_name]
+      properties:
+        email: {type: string, format: email, maxLength: 320}
+        password: {type: string, minLength: 8, maxLength: 128}
+        username: {type: string, pattern: '^[A-Za-z0-9_]{3,40}$'}
+        display_name: {type: string, minLength: 1, maxLength: 80}
+    AuthResult:
+      type: object
+      required: [access_token, expires_in, user]
+      properties:
+        access_token: {type: string}
+        expires_in: {type: integer, minimum: 1}
+        user: {$ref: '#/components/schemas/User'}
+    PublicUser:
+      type: object
+      required: [id, username, display_name, creator_status]
+      properties:
+        id: {type: string}
+        username: {type: string}
+        display_name: {type: string}
+        bio: {type: [string, 'null']}
+        avatar_url: {type: [string, 'null'], format: uri}
+        creator_status: {type: string}
+        follower_count: {type: integer, minimum: 0}
+        content_count: {type: integer, minimum: 0}
+    User:
+      allOf:
+        - $ref: '#/components/schemas/PublicUser'
+        - type: object
+          required: [email, status, role]
+          properties:
+            email: {type: string, format: email}
+            status: {type: string, enum: [pending, active, suspended, deleted]}
+            role: {type: string, enum: [member, moderator, admin]}
+    ContentType:
+      type: string
+      enum: [post, article, project, agent_listing]
+    Content:
+      type: object
+      required: [id, author, type, status, visibility, version, created_at, updated_at]
+      properties:
+        id: {type: string}
+        author: {$ref: '#/components/schemas/PublicUser'}
+        type: {$ref: '#/components/schemas/ContentType'}
+        status: {type: string, enum: [draft, pending_review, published, rejected, removed, archived]}
+        visibility: {type: string, enum: [public, unlisted, followers, private]}
+        title: {type: [string, 'null'], maxLength: 200}
+        slug: {type: [string, 'null']}
+        summary: {type: [string, 'null'], maxLength: 600}
+        body_markdown: {type: string}
+        version: {type: integer, minimum: 1}
+        stats:
+          type: object
+          properties:
+            views: {type: integer, minimum: 0}
+            comments: {type: integer, minimum: 0}
+            likes: {type: integer, minimum: 0}
+            bookmarks: {type: integer, minimum: 0}
+        viewer_state:
+          type: object
+          properties:
+            liked: {type: boolean}
+            bookmarked: {type: boolean}
+        published_at: {type: [string, 'null'], format: date-time}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    CreateContentRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        type: {$ref: '#/components/schemas/ContentType'}
+        title: {type: [string, 'null'], maxLength: 200}
+        summary: {type: [string, 'null'], maxLength: 600}
+        body_markdown: {type: string, maxLength: 1000000}
+        visibility: {type: string, enum: [public, unlisted, followers, private]}
+        category_id: {type: [string, 'null']}
+        tag_ids:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          items: {type: string}
+    Comment:
+      type: object
+      required: [id, content_id, author, body, depth, created_at]
+      properties:
+        id: {type: string}
+        content_id: {type: string}
+        author: {$ref: '#/components/schemas/PublicUser'}
+        parent_id: {type: [string, 'null']}
+        root_id: {type: [string, 'null']}
+        depth: {type: integer, minimum: 0, maximum: 2}
+        body: {type: string}
+        created_at: {type: string, format: date-time}
+    UploadIntent:
+      type: object
+      required: [file_id, upload, limits]
+      properties:
+        file_id: {type: string}
+        upload:
+          type: object
+          required: [method, url, expires_at]
+          properties:
+            method: {type: string, const: PUT}
+            url: {type: string, format: uri}
+            headers: {type: object, additionalProperties: {type: string}}
+            expires_at: {type: string, format: date-time}
+        limits:
+          type: object
+          properties:
+            max_size_bytes: {type: integer}
+    FileObject:
+      type: object
+      required: [id, filename, status, created_at]
+      properties:
+        id: {type: string}
+        filename: {type: string}
+        status: {type: string, enum: [initiated, uploaded, scanning, ready, rejected, deleted]}
+        detected_mime: {type: [string, 'null']}
+        size_bytes: {type: [integer, 'null']}
+        created_at: {type: string, format: date-time}
+    Page:
+      type: object
+      required: [has_more]
+      properties:
+        next_cursor: {type: [string, 'null']}
+        has_more: {type: boolean}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id, retryable]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            details: {type: array, items: {type: object}}
+            request_id: {type: string}
+            retryable: {type: boolean}
+  responses:
+    Unauthorized:
+      description: Authentication required or expired
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    NotFound:
+      description: Resource does not exist or is not visible
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Conflict:
+      description: Unique, state, or version conflict
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    ValidationError:
+      description: Semantic validation failed
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    RateLimited:
+      description: Rate or quota exceeded
+      headers:
+        Retry-After:
+          schema: {type: integer}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    PayloadTooLarge:
+      description: Payload exceeds configured limit
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
