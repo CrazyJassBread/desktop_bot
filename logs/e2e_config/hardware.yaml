@@ -1,0 +1,16 @@
+# Firmware-facing transport configuration.
+# Bot protocols:
+# - TCP 8081: PCM s16le, 16 kHz, mono
+# - HTTP 8082: POST /upload with a 640x480 JPEG body
+
+hardware:
+  audio_enabled: true
+  audio_host: 0.0.0.0
+  audio_port: 8081
+  audio_frame_samples: 512
+  audio_queue_size: 256
+  vision_enabled: true
+  vision_host: 0.0.0.0
+  vision_port: 8082
+  vision_upload_path: /upload
+  session_id: bot

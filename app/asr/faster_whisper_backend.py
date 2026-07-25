@@ -41,8 +41,17 @@ class FasterWhisperBackend(ASRBackend):
                             "faster-whisper is not installed; install optional dependencies"
                         ) from exc
                     self.model_dir.mkdir(parents=True, exist_ok=True)
+                    # Prefer a local CTranslate2 model directory such as
+                    # models/faster-whisper-small; otherwise fall back to
+                    # downloading the named model into model_dir.
+                    local_dir = self.model_dir / f"faster-whisper-{self.model_name}"
+                    model_source = (
+                        str(local_dir)
+                        if (local_dir / "model.bin").is_file()
+                        else self.model_name
+                    )
                     self._model = WhisperModel(
-                        self.model_name,
+                        model_source,
                         device=self.device,
                         compute_type=self.compute_type,
                         download_root=str(self.model_dir),

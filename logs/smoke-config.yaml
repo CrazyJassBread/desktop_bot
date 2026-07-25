@@ -1,0 +1,98 @@
+audio:
+  target_sample_rate: 16000
+
+asr:
+  backend: mock
+  model: small
+  model_dir: models
+  device: cpu
+  compute_type: int8
+  language: zh
+
+# Bot protocols:
+# - TCP 8081: PCM s16le, 16 kHz, mono
+# - HTTP 8082: POST /upload with a 640x480 JPEG body
+hardware:
+  audio_enabled: true
+  audio_host: 0.0.0.0
+  audio_port: 8081
+  audio_frame_samples: 512
+  audio_queue_size: 256
+  vision_enabled: false
+  vision_host: 0.0.0.0
+  vision_port: 8082
+  vision_upload_path: /upload
+  session_id: bot
+
+vad:
+  enabled: true
+  backend: silero
+  model: bundled
+  speech_threshold: 0.60
+  release_threshold: 0.35
+  min_speech_duration_ms: 250
+  min_silence_duration_ms: 800
+  pre_roll_ms: 200
+  max_utterance_seconds: 60
+
+# Keywords create explicit intents. In chat mode, unmatched ASR text is routed
+# to the chat feature as a question.
+keywords:
+  wake:
+    - 小P
+    - 小皮
+    - 小屁
+    - 小批
+  enter_chat:
+    - 进入聊天模式
+    - 开始聊天
+    - 智能问答
+  exit_chat:
+    - 退出聊天模式
+    - 结束聊天
+    - 返回普通模式
+  write_letter:
+    - 帮我写信
+    - 我要写一封信
+  # Future voice entry points can be registered without changing ASR code:
+  # custom:
+  #   music.open:
+  #     - 打开音乐
+  custom: {}
+
+perception:
+  event_cache_capacity: 100
+  event_ttl_seconds: 1800
+  utterance_queue_size: 4
+  vision_max_fps: 5
+
+vision:
+  enabled: false
+  backend: mediapipe
+  gesture_model: models/gesture_recognizer.task
+  image_width: 640
+  image_height: 480
+  max_image_bytes: 2097152
+  max_hands: 2
+  score_threshold: 0.70
+  mode_window_size: 5
+  mode_required_hits: 3
+  release_frames: 2
+  gesture_window_size: 3
+  gesture_required_hits: 2
+
+application:
+  default_language: zh
+  photo_enabled: true
+  photo_delay_seconds: 2.0
+  photo_frame_max_age_seconds: 1.0
+  photo_output_dir: captured_photos
+  # Set this to the AI photo service's multipart HTTP endpoint.
+  photo_processor_url: ""
+  downstream_timeout_seconds: 10.0
+
+api:
+  enabled: true
+  host: 0.0.0.0
+  port: 8090
+  websocket_path: /api/events

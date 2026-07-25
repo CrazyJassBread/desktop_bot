@@ -188,7 +188,7 @@ async def test_controller_routes_chat_and_language_commands():
     assert commands[0].payload["parameters"]["question"] == "举个例子"
 
     language = await controller.handle(
-        PerceptionEvent("gesture.victory", "vision")
+        PerceptionEvent("gesture.open_palm", "vision")
     )
     assert controller.state.language == "en"
     assert [item.event_type for item in language] == [
@@ -198,7 +198,7 @@ async def test_controller_routes_chat_and_language_commands():
 
 
 @pytest.mark.asyncio
-async def test_open_palm_captures_latest_frame_after_delay(tmp_path):
+async def test_victory_captures_latest_frame_after_delay(tmp_path):
     store = LatestFrameStore()
     manager = PhotoCaptureManager(
         store,
@@ -222,7 +222,7 @@ async def test_open_palm_captures_latest_frame_after_delay(tmp_path):
         )
     )
     commands = await controller.handle(
-        PerceptionEvent("gesture.open_palm", "vision")
+        PerceptionEvent("gesture.victory", "vision")
     )
     assert [item.event_type for item in commands] == [
         "command.camera.capture_after"

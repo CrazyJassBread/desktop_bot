@@ -64,13 +64,22 @@ class KeywordConfig:
         default_factory=lambda: ["小A", "小爱", "小诶"]
     )
     enter_chat: list[str] = field(
-        default_factory=lambda: ["进入聊天模式", "开始聊天", "智能问答"]
+        default_factory=lambda: ["进入聊天模式", "开始聊天"]
     )
     exit_chat: list[str] = field(
         default_factory=lambda: ["退出聊天模式", "结束聊天", "返回普通模式"]
     )
     write_letter: list[str] = field(
-        default_factory=lambda: ["帮我写信", "我要写一封信"]
+        default_factory=lambda: ["开始写信", "帮我写信", "我要写一封信"]
+    )
+    end_letter: list[str] = field(
+        default_factory=lambda: ["结束写信", "写完了", "信写完了"]
+    )
+    start_qa: list[str] = field(
+        default_factory=lambda: ["我有一个问题", "智能问答", "请回答我的问题"]
+    )
+    end_qa: list[str] = field(
+        default_factory=lambda: ["结束问答", "问完了"]
     )
     custom: dict[str, list[str]] = field(default_factory=dict)
 
@@ -119,6 +128,32 @@ class APIConfig:
     websocket_path: str = "/api/events"
 
 
+_DEFAULT_LETTER_PROMPT = (
+    "你是一位文笔优美的书信作者。请把用户口述的零散内容整理成一封完整的中文信件："
+    "清除口语赘词与重复，保留原意与关键信息，文风文艺优美、真挚自然。"
+    "只输出信件正文，不要任何解释。"
+)
+_DEFAULT_QA_PROMPT = (
+    "你是一个简洁的语音问答助手。请从用户口述内容中找出问题，"
+    "用简短、直接的中文回答。只输出答案本身，不要重复问题，不要多余解释。"
+)
+
+
+@dataclass
+class LLMConfig:
+    backend: str = "disabled"
+    base_url: str = "https://api.deepseek.com"
+    model: str = "deepseek-v4-flash"
+    api_key: str = ""
+    api_key_env: str = "DEEPSEEK_API_KEY"
+    temperature: float = 1.0
+    max_tokens: int = 900
+    timeout_seconds: float = 40.0
+    silence_timeout_seconds: float = 10.0
+    letter_system_prompt: str = _DEFAULT_LETTER_PROMPT
+    qa_system_prompt: str = _DEFAULT_QA_PROMPT
+
+
 @dataclass
 class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -130,6 +165,7 @@ class AppConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     application: ApplicationConfig = field(default_factory=ApplicationConfig)
     api: APIConfig = field(default_factory=APIConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
 
 
 _SECTIONS: dict[str, type[Any]] = {
@@ -142,6 +178,7 @@ _SECTIONS: dict[str, type[Any]] = {
     "vision": VisionConfig,
     "application": ApplicationConfig,
     "api": APIConfig,
+    "llm": LLMConfig,
 }
 
 
@@ -233,6 +270,9 @@ def _validate(config: AppConfig) -> None:
         ("keywords.enter_chat", config.keywords.enter_chat),
         ("keywords.exit_chat", config.keywords.exit_chat),
         ("keywords.write_letter", config.keywords.write_letter),
+        ("keywords.end_letter", config.keywords.end_letter),
+        ("keywords.start_qa", config.keywords.start_qa),
+        ("keywords.end_qa", config.keywords.end_qa),
     ):
         if not isinstance(phrases, list) or not all(
             isinstance(item, str) and item.strip() for item in phrases
@@ -306,18 +346,88 @@ def _validate(config: AppConfig) -> None:
         for key, value in config.asr.mock_transcripts.items()
     ):
         raise ConfigurationError("asr.mock_transcripts must map strings to strings")
+    if config.llm.backend not in {"deepseek", "mock", "disabled"}:
+        raise ConfigurationError(
+            "llm.backend must be one of: deepseek, mock, disabled"
+        )
+    _positive(config.llm.timeout_seconds, "llm.timeout_seconds")
+    _positive(
+        config.llm.silence_timeout_seconds,
+        "llm.silence_timeout_seconds",
+    )
+    _positive_int(config.llm.max_tokens, "llm.max_tokens")
+    if isinstance(config.llm.temperature, bool) or not isinstance(
+        config.llm.temperature, (int, float)
+    ):
+        raise ConfigurationError("llm.temperature must be a number")
+    if config.llm.temperature < 0:
+        raise ConfigurationError("llm.temperature must be non-negative")
+    if config.llm.backend != "disabled":
+        for name, value in (
+            ("llm.letter_system_prompt", config.llm.letter_system_prompt),
+            ("llm.qa_system_prompt", config.llm.qa_system_prompt),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError(f"{name} cannot be empty")
+    if config.llm.backend == "deepseek":
+        for name, value in (
+            ("llm.base_url", config.llm.base_url),
+            ("llm.model", config.llm.model),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError(f"{name} cannot be empty")
+        if not isinstance(config.llm.api_key, str) or not isinstance(
+            config.llm.api_key_env, str
+        ):
+            raise ConfigurationError(
+                "llm.api_key and llm.api_key_env must be strings"
+            )
+        if not config.llm.api_key.strip() and not config.llm.api_key_env.strip():
+            raise ConfigurationError(
+                "llm.api_key or llm.api_key_env must be provided"
+            )
+
+
+def _load_file(config_path: Path) -> dict[str, Any]:
+    loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        raise ConfigurationError(f"config root must be a mapping: {config_path}")
+    return loaded
+
+
+def _load_directory(config_dir: Path) -> dict[str, Any]:
+    files = sorted(
+        item
+        for item in config_dir.iterdir()
+        if item.is_file() and item.suffix in {".yaml", ".yml"}
+    )
+    if not files:
+        raise ConfigurationError(f"no yaml files found in: {config_dir}")
+    data: dict[str, Any] = {}
+    seen: dict[str, Path] = {}
+    for file_path in files:
+        loaded = _load_file(file_path)
+        for section in loaded:
+            if section in seen:
+                raise ConfigurationError(
+                    f"config section '{section}' is defined in both "
+                    f"{seen[section].name} and {file_path.name}"
+                )
+            seen[section] = file_path
+        data.update(loaded)
+    return data
 
 
 def load_config(path: Path | str | None = None) -> AppConfig:
     data: dict[str, Any] = {}
     if path is not None:
         config_path = Path(path)
-        if not config_path.is_file():
-            raise ConfigurationError(f"config file not found: {config_path}")
-        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        if not isinstance(loaded, dict):
-            raise ConfigurationError("config root must be a mapping")
-        data = loaded
+        if config_path.is_dir():
+            data = _load_directory(config_path)
+        elif config_path.is_file():
+            data = _load_file(config_path)
+        else:
+            raise ConfigurationError(f"config path not found: {config_path}")
     unknown = set(data) - set(_SECTIONS)
     if unknown:
         raise ConfigurationError(

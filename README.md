@@ -70,6 +70,17 @@ python -m app --vision-only
 python -m app test
 ```
 
+用电脑麦克风本地测试 ASR + LLM（写信/问答）链路，不需要固件：
+
+```bash
+python -m app mictest
+```
+
+该模式关闭视觉通道，直接采集本机麦克风；ASR 转写与 LLM 结果分别追加到
+`logs/mictest/asr_results.jsonl` 和 `logs/mictest/llm_results.jsonl`，
+并实时打印在控制台（需要 `pip install sounddevice`，首次运行请允许终端
+访问麦克风）。
+
 ## 功能团队接入
 
 默认 API 监听 `8090`：
@@ -186,17 +197,22 @@ image=<JPEG/PNG/WebP file>
 
 ## 配置
 
-[config.yaml](config.yaml) 包含当前运行时使用的九部分：
+配置拆分在 [config/](config/) 目录下，`--config` 传目录即可合并加载所有 `*.yaml`（顶层章节不可重复；也兼容传单个文件）：
 
-- `audio`：采样率；
-- `asr`：Faster Whisper 模型和推理设备；
-- `hardware`：监听地址、端口和开关；
-- `vad`：语音检测与断句阈值；
-- `keywords`：唤醒、模式切换和写信关键词；
-- `perception`：事件缓存、语句队列和视觉 FPS；
-- `vision`：MediaPipe 模型、尺寸和稳定检测策略。
-- `application`：默认语言、2 秒拍照、照片目录和下游处理地址；
-- `api`：HTTP/WebSocket 集成接口。
+- [config/app.yaml](config/app.yaml)
+  - `audio`：采样率；
+  - `asr`：Faster Whisper 模型和推理设备；
+  - `vad`：语音检测与断句阈值；
+  - `perception`：事件缓存、语句队列和视觉 FPS；
+  - `vision`：MediaPipe 模型、尺寸和稳定检测策略；
+  - `application`：默认语言、2 秒拍照、照片目录和下游处理地址；
+  - `api`：HTTP/WebSocket 集成接口。
+- [config/keywords.yaml](config/keywords.yaml)
+  - `keywords`：唤醒、聊天模式切换、写信/问答会话的进入与结束关键词。
+- [config/llm.yaml](config/llm.yaml)
+  - `llm`：会话后端（deepseek / mock / disabled）、静默超时、写信与问答 system prompt；密钥通过 `api_key_env` 指定的环境变量提供，不落盘。
+- [config/hardware.yaml](config/hardware.yaml)
+  - `hardware`：监听地址、端口和开关。
 
 尚未确定的语音入口可以添加到 `keywords.custom`。例如
 `music.open: [打开音乐]` 会输出 `command.music.open`，不需要修改 ASR。

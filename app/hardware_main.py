@@ -15,7 +15,14 @@ from app.control.application_controller import ApplicationController
 from app.detection.keywords import KeywordDetector
 from app.event_cache import EventCache
 from app.events.event_bus import EventBus
-from app.factories import build_asr, build_gesture, build_vad, setup_logging
+from app.factories import (
+    build_asr,
+    build_gesture,
+    build_llm,
+    build_vad,
+    setup_logging,
+)
+from app.features.llm_session import LLMSessionManager
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
 from app.runtime.perception_daemon import PerceptionDaemon
 from app.transport.hardware_sources import (
@@ -35,11 +42,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=("run", "test"),
+        choices=("run", "test", "mictest"),
         default="run",
-        help="run the service, or open the live Vision test window",
+        help=(
+            "run the service, open the live Vision test window, or test "
+            "ASR+LLM with the local microphone"
+        ),
     )
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("config"))
     parser.add_argument("--session", default=None)
     channel = parser.add_mutually_exclusive_group()
     channel.add_argument("--audio-only", action="store_true")
@@ -61,8 +71,15 @@ def build_daemon(
     config: AppConfig,
     args: argparse.Namespace,
 ) -> tuple[PerceptionDaemon, GestureBackend | None]:
-    audio_enabled = config.hardware.audio_enabled and not args.vision_only
-    vision_enabled = config.hardware.vision_enabled and not args.audio_only
+    mictest = args.mode == "mictest"
+    audio_enabled = (
+        mictest or config.hardware.audio_enabled
+    ) and not args.vision_only
+    vision_enabled = (
+        config.hardware.vision_enabled
+        and not args.audio_only
+        and not mictest
+    )
     if not audio_enabled and not vision_enabled:
         raise ConfigurationError("both hardware input channels are disabled")
 
@@ -84,17 +101,26 @@ def build_daemon(
     if audio_enabled:
         if not config.vad.enabled:
             raise ConfigurationError("hardware audio requires vad.enabled=true")
-        audio_source = TCPPCMAudioSource(
-            args.audio_host or config.hardware.audio_host,
-            (
-                args.audio_port
-                if args.audio_port is not None
-                else config.hardware.audio_port
-            ),
-            sample_rate=config.audio.target_sample_rate,
-            frame_samples=config.hardware.audio_frame_samples,
-            queue_size=config.hardware.audio_queue_size,
-        )
+        if mictest:
+            from app.transport.mic_source import MicrophoneAudioSource
+
+            audio_source = MicrophoneAudioSource(
+                sample_rate=config.audio.target_sample_rate,
+                frame_samples=config.hardware.audio_frame_samples,
+                queue_size=config.hardware.audio_queue_size,
+            )
+        else:
+            audio_source = TCPPCMAudioSource(
+                args.audio_host or config.hardware.audio_host,
+                (
+                    args.audio_port
+                    if args.audio_port is not None
+                    else config.hardware.audio_port
+                ),
+                sample_rate=config.audio.target_sample_rate,
+                frame_samples=config.hardware.audio_frame_samples,
+                queue_size=config.hardware.audio_queue_size,
+            )
         segmenter = StreamingAudioPipeline(
             config.vad,
             build_vad(config),
@@ -143,9 +169,20 @@ def build_daemon(
                 ),
             )
 
+    llm_manager = None
+    llm_backend = build_llm(config)
+    if llm_backend is not None:
+        llm_manager = LLMSessionManager(
+            llm_backend,
+            silence_timeout_seconds=config.llm.silence_timeout_seconds,
+            letter_system_prompt=config.llm.letter_system_prompt,
+            qa_system_prompt=config.llm.qa_system_prompt,
+        )
+
     controller = ApplicationController(
         default_language=config.application.default_language,
         photo_manager=photo_manager,
+        llm_manager=llm_manager,
     )
 
     daemon = PerceptionDaemon(
@@ -168,7 +205,18 @@ async def run(args: argparse.Namespace) -> None:
     setup_logging()
     daemon, gesture_backend = build_daemon(config, args)
     api_server = None
+    recorder = None
     try:
+        if args.mode == "mictest":
+            from app.features.result_recorder import ResultRecorder
+
+            recorder = ResultRecorder(daemon.event_bus)
+            recorder.start()
+            LOGGER.info(
+                "mictest recording ASR to %s and LLM to %s",
+                recorder.asr_path,
+                recorder.llm_path,
+            )
         if config.api.enabled:
             from app.api.server import EventAPIServer
 
@@ -193,6 +241,8 @@ async def run(args: argparse.Namespace) -> None:
         )
         await daemon.run()
     finally:
+        if recorder is not None:
+            await recorder.aclose()
         if api_server is not None:
             await api_server.stop()
         if daemon.application_controller is not None:

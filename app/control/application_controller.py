@@ -17,6 +17,7 @@ class AppState:
     chat_session_id: str | None = None
     photo_state: str = "idle"
     active_feature: str | None = None
+    llm_mode: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -28,9 +29,11 @@ class ApplicationController:
         *,
         default_language: str = "zh",
         photo_manager: object | None = None,
+        llm_manager: object | None = None,
     ) -> None:
         self.state = AppState(language=default_language)
         self.photo_manager = photo_manager
+        self.llm_manager = llm_manager
         self._emit: EventEmitter | None = None
 
     def set_event_emitter(self, emitter: EventEmitter) -> None:
@@ -38,11 +41,20 @@ class ApplicationController:
         if self.photo_manager is not None:
             set_emitter = getattr(self.photo_manager, "set_event_emitter")
             set_emitter(emitter)
+        if self.llm_manager is not None:
+            set_emitter = getattr(self.llm_manager, "set_event_emitter")
+            set_emitter(emitter)
 
     async def handle(
         self,
         event: PerceptionEvent,
     ) -> tuple[PerceptionEvent, ...]:
+        if event.event_type.startswith("llm."):
+            return self._track_llm_state(event)
+        if self._llm_session_active():
+            consumed = await self._route_to_llm_session(event)
+            if consumed:
+                return ()
         if event.event_type in {"wake", "mode.enter_chat"}:
             return self._start_chat(event)
         if event.event_type == "mode.exit_chat":
@@ -50,13 +62,12 @@ class ApplicationController:
         if event.event_type == "speech.transcribed":
             return self._route_transcript(event)
         if event.event_type == "feature.write_letter":
-            return (
-                self._command(
-                    "letter.compose",
-                    event,
-                    {"content": event.payload.get("payload_text", "")},
-                ),
-            )
+            return await self._start_llm_session("letter", event)
+        if event.event_type == "feature.start_qa":
+            return await self._start_llm_session("qa", event)
+        if event.event_type in {"feature.end_letter", "feature.end_qa"}:
+            # There is no active dictation session to end.
+            return ()
         if event.event_type.startswith("intent."):
             command_type = event.event_type.removeprefix("intent.")
             return (
@@ -69,9 +80,9 @@ class ApplicationController:
                     },
                 ),
             )
-        if event.event_type == "gesture.victory":
-            return self._switch_language(event)
         if event.event_type == "gesture.open_palm":
+            return self._switch_language(event)
+        if event.event_type == "gesture.victory":
             if self.photo_manager is None:
                 return (
                     self._result(
@@ -107,6 +118,90 @@ class ApplicationController:
                     "chat" if self.state.chat_active else None
                 )
             return ()
+        return ()
+
+    def _llm_session_active(self) -> bool:
+        return self.llm_manager is not None and bool(
+            getattr(self.llm_manager, "active")
+        )
+
+    async def _start_llm_session(
+        self,
+        mode: str,
+        event: PerceptionEvent,
+    ) -> tuple[PerceptionEvent, ...]:
+        initial_text = str(event.payload.get("payload_text", ""))
+        if self.llm_manager is None:
+            if mode == "letter":
+                # Degraded mode without an LLM: forward the dictated text as-is.
+                return (
+                    self._command(
+                        "letter.compose",
+                        event,
+                        {"content": initial_text},
+                    ),
+                )
+            return ()
+        await getattr(self.llm_manager, "start")(mode, event, initial_text)
+        self.state.llm_mode = getattr(self.llm_manager, "mode")
+        return ()
+
+    async def _route_to_llm_session(self, event: PerceptionEvent) -> bool:
+        """Feed speech into the active dictation session. Returns True when consumed."""
+        assert self.llm_manager is not None
+        mode = getattr(self.llm_manager, "mode")
+        end_event = (
+            "feature.end_letter" if mode == "letter" else "feature.end_qa"
+        )
+        if event.event_type == end_event:
+            await getattr(self.llm_manager, "finish")(
+                final_text=str(event.payload.get("payload_text", "")),
+                reason="end_keyword",
+            )
+            return True
+        if event.event_type == "speech.transcribed":
+            if event.payload.get("matched_event") is None:
+                await getattr(self.llm_manager, "add_transcript")(
+                    str(event.payload.get("transcript", ""))
+                )
+            return True
+        spoken_intents = {
+            "wake",
+            "mode.enter_chat",
+            "mode.exit_chat",
+            "feature.write_letter",
+            "feature.start_qa",
+            "feature.end_letter",
+            "feature.end_qa",
+        }
+        if event.event_type in spoken_intents or event.event_type.startswith(
+            "intent."
+        ):
+            # Any other spoken command counts as dictated content.
+            await getattr(self.llm_manager, "add_transcript")(
+                str(event.payload.get("transcript", ""))
+            )
+            return True
+        return False
+
+    def _track_llm_state(
+        self,
+        event: PerceptionEvent,
+    ) -> tuple[PerceptionEvent, ...]:
+        if event.event_type == "llm.session_started":
+            mode = event.payload.get("mode")
+            self.state.llm_mode = str(mode) if mode else None
+            self.state.active_feature = "llm"
+        elif event.event_type in {
+            "llm.letter_completed",
+            "llm.answer_completed",
+            "llm.failed",
+        }:
+            self.state.llm_mode = None
+            if self.state.active_feature == "llm":
+                self.state.active_feature = (
+                    "chat" if self.state.chat_active else None
+                )
         return ()
 
     def _start_chat(
@@ -230,3 +325,5 @@ class ApplicationController:
     async def aclose(self) -> None:
         if self.photo_manager is not None:
             await getattr(self.photo_manager, "aclose")()
+        if self.llm_manager is not None:
+            await getattr(self.llm_manager, "aclose")()

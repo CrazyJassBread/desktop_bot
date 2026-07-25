@@ -84,7 +84,7 @@ def _draw_overlay(
 
 
 async def run_live_view(
-    config_path: Path | str = Path("config.yaml"),
+    config_path: Path | str = Path("config"),
     *,
     host: str | None = None,
     port: int | None = None,
@@ -199,7 +199,7 @@ async def run_live_view(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Open the live Vision window.")
-    parser.add_argument("--config", type=Path, default=Path("config.yaml"))
+    parser.add_argument("--config", type=Path, default=Path("config"))
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--session", default=None)

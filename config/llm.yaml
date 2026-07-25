@@ -1,0 +1,23 @@
+# LLM session configuration for letter writing and quick Q&A.
+# api_key takes precedence; if empty, the key is read from the
+# environment variable named by api_key_env.
+# NOTE: keep this file out of public repositories when api_key is set.
+
+llm:
+  backend: deepseek # deepseek | mock | disabled
+  base_url: https://api.deepseek.com
+  model: deepseek-v4-flash # deepseek-v4-flash | deepseek-v4-pro
+  api_key: sk-89928b0242a14c618c9087251aeeaa1a
+  api_key_env: DEEPSEEK_API_KEY
+  temperature: 1.0
+  max_tokens: 4096
+  timeout_seconds: 40
+  # End the dictation session automatically after this much silence.
+  silence_timeout_seconds: 10.0
+  letter_system_prompt: >-
+    你是一位文笔优美的书信作者。请把用户口述的零散内容整理成一封完整的中文信件：
+    清除口语赘词与重复，保留原意与关键信息，文风文艺优美、真挚自然。
+    只输出信件正文，不要任何解释。
+  qa_system_prompt: >-
+    你是一个简洁的语音问答助手。请从用户口述内容中找出问题，
+    用简短、直接的中文回答。只输出答案本身，不要重复问题，不要多余解释。

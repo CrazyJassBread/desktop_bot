@@ -1,0 +1,9 @@
+{"time": "2026-07-25T19:48:46.386", "event_type": "speech.transcribed", "transcript": "嗨 你好", "audio_duration_seconds": 1.696, "matched_event": null}
+{"time": "2026-07-25T19:48:55.340", "event_type": "speech.transcribed", "transcript": "现在的功能是什么", "audio_duration_seconds": 6.24, "matched_event": null}
+{"time": "2026-07-25T19:49:04.488", "event_type": "speech.transcribed", "transcript": "开始写信", "audio_duration_seconds": 6.656, "matched_event": "feature.write_letter"}
+{"time": "2026-07-25T19:49:10.908", "event_type": "speech.transcribed", "transcript": "現在吳昂寫一封信給Claudia", "audio_duration_seconds": 3.392, "matched_event": null}
+{"time": "2026-07-25T19:49:19.410", "event_type": "speech.transcribed", "transcript": "信件的内容是关于我在这个黑克松的会场的一些感受和经历", "audio_duration_seconds": 7.392, "matched_event": null}
+{"time": "2026-07-25T19:49:26.140", "event_type": "speech.transcribed", "transcript": "然后我希望这光线的内容尽可能有趣", "audio_duration_seconds": 4.16, "matched_event": null}
+{"time": "2026-07-25T19:49:32.193", "event_type": "speech.transcribed", "transcript": "所以说我在想我应该分享些什么东西", "audio_duration_seconds": 3.68, "matched_event": null}
+{"time": "2026-07-25T19:49:36.158", "event_type": "speech.transcribed", "transcript": "结束写信", "audio_duration_seconds": 1.76, "matched_event": "feature.end_letter"}
+{"time": "2026-07-25T19:50:00.692", "event_type": "speech.transcribed", "transcript": "我先拿去拿吧哦 OK OK哦 又来了一层鲜的椅子可以", "audio_duration_seconds": 12.512, "matched_event": null}

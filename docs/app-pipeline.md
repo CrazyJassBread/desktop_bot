@@ -97,7 +97,7 @@ python -m app test
 ```
 
 `--audio-only` 和 `--vision-only` 互斥。命令行地址、端口和 session 会覆盖
-`config.yaml` 中相应值。`--scale` 只影响 `test` 模式的显示窗口。
+`config/` 目录中相应值。`--scale` 只影响 `test` 模式的显示窗口。
 
 ## 3. 启动阶段
 
@@ -118,7 +118,7 @@ sequenceDiagram
     Shell->>Entry: python -m app
     Entry->>Main: main()
     Main->>Main: 解析 CLI 参数
-    Main->>Config: load_config(config.yaml)
+    Main->>Config: load_config(config/)
     Config-->>Main: AppConfig
     Main->>Factory: setup_logging()
     Main->>Factory: 构造 VAD / ASR / Gesture backend
@@ -786,7 +786,7 @@ TCP 音频发送端当前不会收到识别文本或业务响应。
 
 | 文件 | 职责 |
 | --- | --- |
-| `config.yaml` | 当前默认运行配置 |
+| `config/` | 当前默认运行配置目录（app.yaml / keywords.yaml / llm.yaml / hardware.yaml，加载时合并顶层章节） |
 | `requirements.txt` | NumPy、YAML、Whisper、ONNX Runtime、MediaPipe、OpenCV 和 Pillow 依赖 |
 | `requirements-dev.txt` | pytest 和 pytest-asyncio 测试依赖 |
 | `scripts/receive_microphone.py` | 固件诊断：直接收 PCM 并保存 `microphone.wav`，不走 VAD/ASR |

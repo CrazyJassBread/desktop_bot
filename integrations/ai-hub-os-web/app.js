@@ -1,10 +1,12 @@
 ﻿import { api, ApiProblem } from "./services/api-client.js";
 import { DeviceBus } from "./services/device-bus.js";
+import { startBotBridge } from "./services/bot-bridge.js";
 import { createCompanionStore, createPrintJob } from "./services/companion-store.js";
 
 const app = document.querySelector("#app");
 const toastRegion = document.querySelector("#toast-region");
 const bus = new DeviceBus("ai-hub-web");
+startBotBridge();
 const companionStore = createCompanionStore();
 
 const DEFAULT_TURTLE_GAME = {
@@ -2128,6 +2130,45 @@ bus.onMessage(async (message) => {
     toast("设备已完成实体 Letter 打印", "success");
     ui.activePrintJobId = null;
     if (currentPath() === "/letter" || currentPath() === "/device") render();
+  }
+  if (message.source !== "desktop-bot") return;
+  if (message.type === "device.speech.transcribed" && message.payload?.transcript) {
+    toast(`🎙 ${message.payload.transcript}`);
+  }
+  if (message.type === "device.gesture.detected") {
+    toast(`设备检测到 ${message.payload?.gesture ?? ""} 手势`.trim());
+  }
+  if (message.type === "device.photo.captured" && message.payload?.photoUrl) {
+    try {
+      const blob = await (await fetch(message.payload.photoUrl)).blob();
+      const file = new File([blob], `${message.payload.captureId ?? "bot-photo"}.jpg`, { type: "image/jpeg" });
+      await api.uploadPhoto(file, { source: "hardware", purpose: "memory", title: "设备拍摄照片" });
+      toast("设备照片已存入个人空间", "success");
+      if (currentPath() === "/companion") render();
+    } catch {
+      toast("设备已拍照（照片同步失败，可在设备端查看）");
+    }
+  }
+  if (message.type === "device.photo.failed") {
+    toast(`设备拍照失败：${message.payload?.reason ?? "unknown"}`, "error");
+  }
+  if (message.type === "device.letter.started") {
+    toast("设备开始录制语音信件");
+  }
+  if (message.type === "device.letter.completed" && message.payload?.body) {
+    try {
+      await api.sendVoiceLetter({
+        recipient: message.payload.recipient || "Aiko",
+        subject: message.payload.subject || undefined,
+        body: message.payload.body,
+        sessionId: message.payload.sessionId,
+        source: "hardware"
+      }, `hw-letter-${message.messageId}`);
+      toast("语音信件已同步到个人空间", "success");
+      if (currentPath() === "/letter") render();
+    } catch (error) {
+      toast(`语音信件同步失败：${error.message}`, "error");
+    }
   }
 });
 

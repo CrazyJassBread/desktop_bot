@@ -11,6 +11,9 @@ from app.asr.mock_backend import MockASRBackend
 from app.audio.vad.base import VADBackend
 from app.audio.vad.silero_backend import SileroVADBackend
 from app.config import AppConfig, ConfigurationError
+from app.llm.base import LLMBackend
+from app.llm.deepseek_client import DeepSeekBackend
+from app.llm.mock_client import MockLLMBackend
 from app.vision.base import GestureBackend
 from app.vision.mediapipe_gesture import MediaPipeGestureBackend
 
@@ -60,3 +63,21 @@ def build_gesture(config: AppConfig) -> GestureBackend:
         "unsupported vision backend: "
         f"{config.vision.backend}; expected mediapipe"
     )
+
+
+def build_llm(config: AppConfig) -> LLMBackend | None:
+    if config.llm.backend == "disabled":
+        return None
+    if config.llm.backend == "mock":
+        return MockLLMBackend()
+    if config.llm.backend == "deepseek":
+        return DeepSeekBackend(
+            base_url=config.llm.base_url,
+            model=config.llm.model,
+            api_key=config.llm.api_key,
+            api_key_env=config.llm.api_key_env,
+            temperature=config.llm.temperature,
+            max_tokens=config.llm.max_tokens,
+            timeout_seconds=config.llm.timeout_seconds,
+        )
+    raise ConfigurationError(f"unsupported LLM backend: {config.llm.backend}")

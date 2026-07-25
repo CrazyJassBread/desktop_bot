@@ -47,7 +47,19 @@ class EventAPIServer:
                 "API is enabled but aiohttp is not installed"
             ) from exc
 
-        app = web.Application()
+        # The local web demo (another origin, e.g. :18000) fetches photos and
+        # polls events from the browser; allow simple cross-origin reads.
+        @web.middleware
+        async def _cors(request, handler):
+            try:
+                response = await handler(request)
+            except web.HTTPException as exc:
+                exc.headers["Access-Control-Allow-Origin"] = "*"
+                raise
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+
+        app = web.Application(middlewares=[_cors])
         app.router.add_get("/api/health", self._health)
         app.router.add_get("/api/state", self._state)
         app.router.add_post("/api/results", self._result)
