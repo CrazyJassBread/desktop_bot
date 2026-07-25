@@ -130,7 +130,7 @@ test("Letter photos are processed as bounded thermal pixel attachments", async (
   assert.ok(rendered.batches.every((batch) => batch.height <= THERMAL_BATCH_MAX_HEIGHT));
 });
 
-test("camera and uploaded photos become printable 384px pixel batches", async () => {
+test("camera and uploaded photos become recognizable 384px dither batches", async () => {
   const source = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420">
     <defs><linearGradient id="sky" x2="1" y2="1"><stop stop-color="#f5e5c8"/><stop offset="1" stop-color="#4a6982"/></linearGradient></defs>
     <rect width="640" height="420" fill="url(#sky)"/>
@@ -141,20 +141,14 @@ test("camera and uploaded photos become printable 384px pixel batches", async ()
     <rect x="390" y="95" width="180" height="210" rx="18" fill="#efe6d8"/>
     <path d="M420 140h120M420 180h90M420 220h120M420 260h75" stroke="#3a4550" stroke-width="12"/>
   </svg>`);
-  const photo = await processThermalImage(source, {
-    profile: "print",
-    pixelSize: 4,
-    grayscaleLevels: 8,
-    contrast: 1,
-    cannyLow: 80,
-    cannyHigh: 160
-  });
+  const photo = await processThermalImage(source, { profile: "print" });
   assert.equal(photo.width, 384);
   assert.ok(photo.height <= 752);
-  assert.equal(photo.processing.pixelSize, 4);
-  assert.equal(photo.processing.grayscaleLevels, 8);
-  assert.equal(photo.processing.cannyLow, 80);
-  assert.equal(photo.processing.cannyHigh, 160);
+  assert.equal(photo.processing.pixelSize, 1);
+  assert.equal(photo.processing.grayscaleLevels, 32);
+  assert.equal(photo.processing.cannyLow, 0);
+  assert.equal(photo.processing.cannyHigh, 0);
+  assert.equal(photo.processing.detailMode, "natural");
   assert.equal(photo.processor, "thermal-image-photo-dither-v2");
   assert.equal(photo.processing.dither, "serpentine-floyd-steinberg");
   assert.match(photo.previewDataUrl, /^data:image\/png;base64,/);

@@ -1,0 +1,16 @@
+schema_version: 1
+module_path: ""
+title: PrintPal 桌面陪伴生态 MVP（根项目）
+scope:
+    - README.md
+    - .gitignore
+    - config.yaml
+    - package.json
+    - requirements.txt
+    - requirements-dev.txt
+    - pytest.ini
+    - .env.example
+    - package-lock.json
+source_files: []
+depends_on: []
+related_to: []

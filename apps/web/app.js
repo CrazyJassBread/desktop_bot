@@ -1,6 +1,7 @@
-﻿import { api, ApiProblem } from "./services/api-client.js";
+import { api, ApiProblem } from "./services/api-client.js";
 import { DeviceBus } from "./services/device-bus.js";
 import { createCompanionStore, createPrintJob } from "./services/companion-store.js";
+import { t, setLanguage, getLanguage } from "./services/i18n.mjs";
 import {
   SLEEP_SCENARIOS,
   SLEEP_STATES,
@@ -19,6 +20,7 @@ const bus = new DeviceBus("ai-hub-web");
 const companionStore = createCompanionStore();
 let imageCameraStream = null;
 let sleepTicker = null;
+let hardwareBridgeTimer = null;
 
 const MATCH_INTEREST_OPTIONS = ["AI", "机器人", "ESP32", "摄影", "游戏", "阅读", "音乐", "旅行", "手帐", "插画", "开源", "自然", "生活", "猫"];
 const MATCH_INTEREST_META = {
@@ -164,29 +166,32 @@ const ui = {
   imageCannyHigh: 0,
   sleepSession: initialSleepState.session,
   sleepReport: initialSleepState.report,
-  sleepPrinting: false
+  sleepPrinting: false,
+  hardwareConnected: false,
+  hardwareBridgeStatus: "disconnected",
+  hardwareLastPhotoCheck: 0
 };
 
 const nav = [
-  ["/", "语音控制", "mic"],
-  ["/community", "社区", "community"],
-  ["/match", "匹配", "match"],
-  ["/letter", "信件", "letter"],
-  ["/images", "图像", "camera"],
-  ["/sleep", "智能睡眠", "moon"],
-  ["/conversations", "对话记录", "community"],
-  ["/prints", "打印记录", "printer"],
-  ["/device", "设备", "device"]
+  ["/", "nav.voice", "mic"],
+  ["/community", "nav.community", "community"],
+  ["/match", "nav.match", "match"],
+  ["/letter", "nav.letter", "letter"],
+  ["/images", "nav.images", "camera"],
+  ["/sleep", "nav.sleep", "moon"],
+  ["/conversations", "nav.conversations", "community"],
+  ["/prints", "nav.prints", "printer"],
+  ["/device", "nav.device", "device"]
 ];
 
 const mobileNav = [
-  ["/", "语音", "mic"],
-  ["/community", "社区", "community"],
-  ["/match", "匹配", "match"],
-  ["/letter", "信件", "letter"],
-  ["/images", "图像", "camera"],
-  ["/sleep", "睡眠", "moon"],
-  ["/device", "设备", "device"]
+  ["/", "nav.voice_short", "mic"],
+  ["/community", "nav.community", "community"],
+  ["/match", "nav.match", "match"],
+  ["/letter", "nav.letter", "letter"],
+  ["/images", "nav.images", "camera"],
+  ["/sleep", "nav.sleep_short", "moon"],
+  ["/device", "nav.device", "device"]
 ];
 
 const paths = {
@@ -241,9 +246,9 @@ function escapeHtml(value) {
 function formatTime(value) {
   const date = new Date(value);
   const diff = Date.now() - date.getTime();
-  if (diff < 60 * 60 * 1000) return `${Math.max(1, Math.round(diff / 60000))} 分钟前`;
-  if (diff < 24 * 60 * 60 * 1000) return `${Math.round(diff / 3600000)} 小时前`;
-  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(date);
+  if (diff < 60 * 60 * 1000) return t("common.unit_minutes_ago", { n: Math.max(1, Math.round(diff / 60000)) });
+  if (diff < 24 * 60 * 60 * 1000) return t("common.unit_hours_ago", { n: Math.round(diff / 3600000) });
+  return new Intl.DateTimeFormat(getLanguage() === "zh" ? "zh-CN" : "en-US", { month: "short", day: "numeric" }).format(date);
 }
 
 function currentPath() {
@@ -282,6 +287,71 @@ function toast(message, tone = "default") {
   }, 2600);
 }
 
+// --- Hardware bridge status (ESP32 desktop_bot WebSocket bridge) ---
+// The bridge runs server-side (desktop-bot-bridge.mjs) and connects to the
+// desktop_bot perception event stream on port 8090. The browser polls a
+// lightweight status endpoint to know whether hardware voice/camera paths
+// are available, and gracefully degrades to browser APIs when disconnected.
+
+function shouldUseHardwareMic() {
+  return ui.hardwareConnected;
+}
+
+function updateHardwareStatusUI() {
+  const dot = document.querySelector("#hardwareDot");
+  const text = document.querySelector("#hardwareStatusText");
+  const cls = ui.hardwareConnected ? "connected" : "disconnected";
+  if (dot) dot.className = `hardware-dot ${cls}`;
+  if (text) text.textContent = ui.hardwareConnected ? t("shell.hardware_connected") : t("shell.hardware_disconnected");
+  document.querySelectorAll(".hardware-status").forEach((el) => {
+    el.classList.toggle("connected", ui.hardwareConnected);
+  });
+}
+
+async function pollHardwareBridgeStatus() {
+  try {
+    const res = await fetch("/api/v1/hardware/bridge/status");
+    if (!res.ok) return;
+    const data = await res.json();
+    const wasConnected = ui.hardwareConnected;
+    ui.hardwareConnected = data.bridge?.connected ?? false;
+    ui.hardwareBridgeStatus = ui.hardwareConnected ? "connected" : "disconnected";
+    if (ui.hardwareConnected !== wasConnected) {
+      updateHardwareStatusUI();
+      if (ui.hardwareConnected) {
+        toast(t("shell.hardware_toast_connected"), "success");
+      } else if (wasConnected) {
+        toast(t("shell.hardware_toast_disconnected"), "default");
+      }
+      if (currentPath() === "/device") render();
+    }
+    // 硬件连接时，在图像页面周期性刷新硬件拍摄的新照片
+    if (ui.hardwareConnected && currentPath() === "/images" && !ui.imageBusy) {
+      const now = Date.now();
+      if (now - ui.hardwareLastPhotoCheck > 15_000) {
+        ui.hardwareLastPhotoCheck = now;
+        try {
+          const photos = await api.photos("print");
+          if (photos.items.length !== ui.imagePhotos.length) {
+            ui.imagePhotos = photos.items;
+            render();
+          }
+        } catch {
+          // 静默失败
+        }
+      }
+    }
+  } catch {
+    // 静默失败：服务端可能未启用桥接
+  }
+}
+
+function startHardwareBridgePolling() {
+  if (hardwareBridgeTimer) return;
+  pollHardwareBridgeStatus();
+  hardwareBridgeTimer = setInterval(pollHardwareBridgeStatus, 5000);
+}
+
 function showLetterSendResult({ tone = "success", title, message, detail, actionLabel = "查看我的信件", onClose }) {
   document.querySelector("[data-send-result]")?.remove();
   const overlay = document.createElement("div");
@@ -313,8 +383,8 @@ function showPhotoPrintConfirm(photo) {
     <button class="modal-close" type="button" data-cancel-photo-print aria-label="关闭">${icon("close", 18)}</button>
     <p class="eyebrow">PHYSICAL PRINT</p>
     <h2 id="photo-print-title">确认打印这张照片？</h2>
-    <figure><img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 热敏像素预览"></figure>
-    <div><span>${photo.processed.width} × ${photo.processed.height}px</span><span>${escapeHtml(photo.processed.processor)}</span></div>
+    <figure><img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 热敏打印预览"></figure>
+    <div><span>${photo.processed.width} × ${photo.processed.height}px</span><span>清晰热敏照片</span></div>
     <p>确认后才会发送到已绑定的热敏打印机。</p>
     <footer>
       <button class="outline-button" type="button" data-cancel-photo-print>再看看</button>
@@ -344,11 +414,11 @@ function showPhotoPrintConfirm(photo) {
 }
 
 function loading() {
-  return `<div class="loading-view"><span class="loading-mark"><i></i><i></i><i></i></span><p>正在连接 PrintPal…</p></div>`;
+  return `<div class="loading-view"><span class="loading-mark"><i></i><i></i><i></i></span><p>${t("shell.loading")}</p></div>`;
 }
 
 function logo() {
-  return `<span class="hub-logo-mark"><i></i><b>P</b></span><span class="hub-logo-copy"><strong>PrintPal</strong><small>小P / Companion</small></span>`;
+  return `<span class="hub-logo-mark"><i></i><b>P</b></span><span class="hub-logo-copy"><strong>PrintPal</strong><small>${t("shell.logo_sub")}</small></span>`;
 }
 
 function shell(content, activePath = currentPath()) {
@@ -360,29 +430,35 @@ function shell(content, activePath = currentPath()) {
         ? "/letter"
         : activePath;
   const user = ui.currentUser ?? {};
+  const lang = getLanguage();
   return `<div class="hub-app">
     <header class="topbar">
-      <button class="hub-logo" data-nav="/" aria-label="PrintPal 首页">${logo()}</button>
-      <nav class="desktop-nav" aria-label="主导航">
-        ${nav.map(([path, label]) => `<button data-nav="${path}" class="${active === path ? "active" : ""}">${label}</button>`).join("")}
+      <button class="hub-logo" data-nav="/" aria-label="${t("shell.logo_label")}">${logo()}</button>
+      <nav class="desktop-nav" aria-label="main navigation">
+        ${nav.map(([path, labelKey]) => `<button data-nav="${path}" class="${active === path ? "active" : ""}">${t(labelKey)}</button>`).join("")}
       </nav>
       <div class="topbar-actions">
+        <button class="lang-switch" data-lang-toggle title="${t("shell.lang_switch")}">${lang === "zh" ? "EN" : "中文"}</button>
+        <div class="hardware-status ${ui.hardwareConnected ? "connected" : ""}" id="hardwareStatus" title="${t("shell.hardware_title")}">
+          <span class="hardware-dot ${ui.hardwareConnected ? "connected" : "disconnected"}" id="hardwareDot"></span>
+          <span id="hardwareStatusText">${ui.hardwareConnected ? t("shell.hardware_connected") : t("shell.hardware_disconnected")}</span>
+        </div>
         <details class="account-menu">
-          <summary><span class="avatar-button">${escapeHtml(user.avatar ?? user.displayName?.slice(0, 1) ?? "U")}</span><span><strong>${escapeHtml(user.displayName ?? "用户")}</strong><small>${escapeHtml(user.email ?? "")}</small></span>${icon("arrow", 13)}</summary>
+          <summary><span class="avatar-button">${escapeHtml(user.avatar ?? user.displayName?.slice(0, 1) ?? "U")}</span><span><strong>${escapeHtml(user.displayName ?? t("shell.user_default"))}</strong><small>${escapeHtml(user.email ?? "")}</small></span>${icon("arrow", 13)}</summary>
           <div>
-            <header><strong>${escapeHtml(user.displayName ?? "用户")}</strong><small>${escapeHtml(user.email ?? "")}</small></header>
-            <button data-nav="/account">${icon("settings", 16)}账号设置</button>
-            <button data-nav="/device">${icon("device", 16)}设备管理</button>
-            <button data-nav="/conversations">${icon("community", 16)}对话记录</button>
-            <button data-nav="/prints">${icon("printer", 16)}打印记录</button>
-            <button data-logout>${icon("close", 16)}退出登录</button>
+            <header><strong>${escapeHtml(user.displayName ?? t("shell.user_default"))}</strong><small>${escapeHtml(user.email ?? "")}</small></header>
+            <button data-nav="/account">${icon("settings", 16)}${t("shell.account_settings")}</button>
+            <button data-nav="/device">${icon("device", 16)}${t("shell.device_mgmt")}</button>
+            <button data-nav="/conversations">${icon("community", 16)}${t("shell.conversation_history")}</button>
+            <button data-nav="/prints">${icon("printer", 16)}${t("shell.print_history")}</button>
+            <button data-logout>${icon("close", 16)}${t("shell.logout")}</button>
           </div>
         </details>
       </div>
     </header>
     <main class="hub-main">${content}</main>
-    <nav class="mobile-nav" aria-label="移动端导航">
-      ${mobileNav.map(([path, label, iconName]) => `<button data-nav="${path}" class="${active === path ? "active" : ""}">${icon(iconName, 19)}<span>${label}</span></button>`).join("")}
+    <nav class="mobile-nav" aria-label="mobile navigation">
+      ${mobileNav.map(([path, labelKey, iconName]) => `<button data-nav="${path}" class="${active === path ? "active" : ""}">${icon(iconName, 19)}<span>${t(labelKey)}</span></button>`).join("")}
     </nav>
   </div>`;
 }
@@ -491,9 +567,9 @@ async function communityView() {
     return post.cover !== "runner" && !tags.includes("小游戏") && !tags.includes("学习打卡");
   });
   return `<section class="page community-page" id="community-view">
-    ${pageHead("COMMUNITY SQUARE", "社区广场", "聊今天、兴趣和心情，也认识生活节奏相近的人。", `<button class="primary-button" data-nav="/create-post">${icon("plus", 17)}分享此刻</button>`)}
+    ${pageHead(t("community.eyebrow"), t("community.title"), t("community.subtitle"), `<button class="primary-button" data-nav="/create-post">${icon("plus", 17)}${t("community.share_now")}</button>`)}
     <div class="community-search">
-      <form id="community-search-form">${icon("search", 19)}<input name="query" value="${escapeHtml(ui.query)}" placeholder="搜索日常、兴趣、城市或朋友"><button>搜索</button></form>
+      <form id="community-search-form">${icon("search", 19)}<input name="query" value="${escapeHtml(ui.query)}" placeholder="${t("community.search_placeholder")}"><button>${t("community.search_btn")}</button></form>
       <div class="category-tabs">${categories.map((category) => `<button data-category="${category}" class="${ui.category === category ? "active" : ""}">${category}</button>`).join("")}</div>
     </div>
     <div class="community-layout">
@@ -559,25 +635,25 @@ function studyProgress(tasks) {
 
 function voiceIntentLabel(intent) {
   return {
-    CHAT: "AI 对话",
-    ORGANIZE_PLAN: "整理今日计划",
-    PRINT_TODAY_PLAN: "今日计划待打印",
-    PRINT_CONVERSATION: "对话摘要待打印",
-    PRINT_WORDS: "单词卡待打印",
-    START_TURTLE_SOUP: "海龟汤",
-    WRITE_LETTER: "AI 写信 · 聆听内容",
-    LETTER_CONTENT: "AI 信件 · 继续聆听",
-    LETTER_REVIEW: "信件草稿待确认",
-    LETTER_CONFIRM_SEND: "正在发送信件",
-    LETTER_CANCELLED: "信件已取消",
-    SEND_LETTER: "正在发送信件",
-    LETTER_SENT: "信件已发送",
-    CONFIRM_PRINT: "确认打印",
-    OPEN_IMAGE_STUDIO: "图像处理",
-    PRINT_SAVED_LETTER: "查找已保存信件",
-    TURTLE_SOUP_ANSWER: "海龟汤 · 判断",
-    TURTLE_SOUP_REVEAL: "海龟汤 · 汤底"
-  }[intent] ?? "AI 助手";
+    CHAT: t("intent.CHAT"),
+    ORGANIZE_PLAN: t("intent.ORGANIZE_PLAN"),
+    PRINT_TODAY_PLAN: t("intent.PRINT_TODAY_PLAN"),
+    PRINT_CONVERSATION: t("intent.PRINT_CONVERSATION"),
+    PRINT_WORDS: t("intent.PRINT_WORDS"),
+    START_TURTLE_SOUP: t("intent.START_TURTLE_SOUP"),
+    WRITE_LETTER: t("intent.WRITE_LETTER"),
+    LETTER_CONTENT: t("intent.LETTER_CONTENT"),
+    LETTER_REVIEW: t("intent.LETTER_REVIEW"),
+    LETTER_CONFIRM_SEND: t("intent.LETTER_CONFIRM_SEND"),
+    LETTER_CANCELLED: t("intent.LETTER_CANCELLED"),
+    SEND_LETTER: t("intent.SEND_LETTER"),
+    LETTER_SENT: t("intent.LETTER_SENT"),
+    CONFIRM_PRINT: t("intent.CONFIRM_PRINT"),
+    OPEN_IMAGE_STUDIO: t("intent.OPEN_IMAGE_STUDIO"),
+    PRINT_SAVED_LETTER: t("intent.PRINT_SAVED_LETTER"),
+    TURTLE_SOUP_ANSWER: t("intent.TURTLE_SOUP_ANSWER"),
+    TURTLE_SOUP_REVEAL: t("intent.TURTLE_SOUP_REVEAL")
+  }[intent] ?? t("intent.default");
 }
 
 function voiceAgentPanel(aiStatus) {
@@ -593,7 +669,7 @@ function voiceAgentPanel(aiStatus) {
       <input name="transcript" maxlength="1500" value="${escapeHtml(ui.voiceTranscript)}" placeholder="也可以输入：帮我打印今日计划 / 我要给妈妈写一封信" required>
       <button class="primary-button" ${ui.voiceProcessing ? "disabled" : ""}>让小P理解 ${icon("arrow", 15)}</button>
     </form>
-    <div class="voice-examples">${["帮我打印今日计划", "把这些单词打印出来", "我要给妈妈写一封信", "最近想你了，记得照顾身体", "结束", "我要玩海龟汤"].map((text) => `<button type="button" data-voice-example="${text}">${text}</button>`).join("")}</div>
+    <div class="voice-examples">${[t("voice.agent_input_placeholder"), t("voice.ex.write_print"), t("voice.ex.email_mom"), t("voice.ex.turtle")].map((text) => `<button type="button" data-voice-example="${text}">${text}</button>`).join("")}</div>
     ${result ? `<section class="voice-ai-result">
       <header><span><p class="eyebrow">${escapeHtml(voiceIntentLabel(result.intent))}</p><strong>${escapeHtml(result.reply)}</strong></span><i>${result.provider === "deepseek" ? "AI" : "LOCAL"}</i></header>
       ${result.warning ? `<p class="voice-warning">${escapeHtml(result.reply)}</p>` : ""}
@@ -789,13 +865,18 @@ function matchPreferenceQuizView() {
 }
 
 const letterStatus = {
-  DRAFT: ["草稿", "neutral"], SENT: ["已发送", "blue"], DELIVERING: ["正在送达", "blue"],
-  RECEIVED: ["已收到", "green"], PRINTING: ["正在打印", "amber"], PRINTED: ["已打印", "green"],
-  PRINT_FAILED: ["打印失败", "red"], PRINT_SKIPPED: ["未自动打印", "neutral"]
+  DRAFT: () => [t("letter.status.DRAFT"), "neutral"],
+  SENT: () => [t("letter.status.SENT"), "blue"],
+  DELIVERING: () => [t("letter.status.DELIVERING"), "blue"],
+  RECEIVED: () => [t("letter.status.RECEIVED"), "green"],
+  PRINTING: () => [t("letter.status.PRINTING"), "amber"],
+  PRINTED: () => [t("letter.status.PRINTED"), "green"],
+  PRINT_FAILED: () => [t("letter.status.PRINT_FAILED"), "red"],
+  PRINT_SKIPPED: () => [t("letter.status.PRINT_SKIPPED"), "neutral"]
 };
 
 function letterCard(letter) {
-  const [label, tone] = letterStatus[letter.status] ?? [letter.status, "neutral"];
+  const [label, tone] = (letterStatus[letter.status] ?? (() => [letter.status, "neutral"]))();
   return `<button class="letter-row ${ui.selectedLetterId === letter.id ? "active" : ""}" data-letter-id="${letter.id}">
     ${avatar(letter.counterpart)}
     <span class="letter-row-copy"><span><strong>${escapeHtml(letter.counterpart.displayName)}</strong><i class="status-pill ${tone}">${label}</i></span><b>${escapeHtml(letter.subject)}</b><small>${escapeHtml(letter.body).replaceAll("\n", " ").slice(0, 60)}…</small></span>
@@ -804,7 +885,7 @@ function letterCard(letter) {
 }
 
 function letterDetail(letter) {
-  if (!letter) return `<div class="letter-detail-empty"><span>${icon("letter", 28)}</span><h3>选择一封信</h3><p>数字送达与实体打印状态会显示在这里。</p></div>`;
+  if (!letter) return `<div class="letter-detail-empty"><span>${icon("letter", 28)}</span><h3>${t("letter.select_prompt")}</h3><p>${t("letter.select_hint")}</p></div>`;
   const assets = Array.isArray(letter.assets) ? letter.assets : [];
   const steps = [
     ["SENT", "已发送", true],
@@ -828,15 +909,15 @@ async function letterView() {
   if (!ui.selectedLetterId && data.items.length) ui.selectedLetterId = data.items[0].id;
   const selected = data.items.find((item) => item.id === ui.selectedLetterId) ?? data.items[0];
   return `<section class="page letters-page" id="letter-view">
-    ${pageHead("LETTERS", "我的信件", "慢一点表达，让一封数字信最终成为真实纸张。", `<button class="primary-button" data-nav="/letter/create">${icon("edit", 16)}写一封信</button>`)}
+    ${pageHead(t("letter.eyebrow"), t("letter.title"), t("letter.subtitle"), `<button class="primary-button" data-nav="/letter/create">${icon("edit", 16)}${t("letter.write_new")}</button>`)}
     <div class="letter-tabs">
-      ${[["inbox", "收件箱"], ["sent", "已发送"], ["draft", "草稿"], ["print", "打印状态"]].map(([box, label]) => {
+      ${[["inbox", t("letter.inbox")], ["sent", t("letter.sent")], ["draft", t("letter.draft")], ["print", t("letter.print_status")]].map(([box, label]) => {
         const count = boxData[box]?.items?.length ?? 0;
         return `<button data-letter-box="${box}" class="${ui.letterBox === box ? "active" : ""}">${label}${count ? `<i>${count}</i>` : ""}</button>`;
       }).join("")}
     </div>
     <div class="letter-layout">
-      <div class="letter-list"><div class="letter-list-head"><span>${data.items.length} 封信</span><button>${icon("search", 16)}</button></div>${data.items.length ? data.items.map(letterCard).join("") : `<div class="empty-list">这里还没有信。</div>`}</div>
+      <div class="letter-list"><div class="letter-list-head"><span>${data.items.length} ${t("letter.count_unit")}</span><button>${icon("search", 16)}</button></div>${data.items.length ? data.items.map(letterCard).join("") : `<div class="empty-list">${t("letter.empty")}</div>`}</div>
       <div class="letter-detail-wrap" id="letter-detail-wrap">${letterDetail(selected)}</div>
     </div>
   </section>`;
@@ -887,8 +968,8 @@ async function letterCreateView() {
 
 function printJobRow(job) {
   const label = {
-    SUCCESS: "打印成功", WAITING_DEVICE: "等待设备", DISPATCHED: "已下发",
-    PRINTING: "正在打印", FAILED_RETRYABLE: "等待重试", CANCELLED: "已取消"
+    SUCCESS: t("device.print_status.SUCCESS"), WAITING_DEVICE: t("device.print_status.WAITING_DEVICE"), DISPATCHED: t("device.print_status.DISPATCHED"),
+    PRINTING: t("device.print_status.PRINTING"), FAILED_RETRYABLE: t("device.print_status.FAILED_RETRYABLE"), CANCELLED: t("device.print_status.CANCELLED")
   }[job.status] ?? job.status;
   return `<div class="print-job-row"><i class="${job.status.toLowerCase()}">${icon("printer", 16)}</i><span><strong>${escapeHtml(job.title)}</strong><small>${formatTime(job.createdAt)} · ${job.format}</small></span><b>${label}</b><button class="round-button">${icon("more", 15)}</button></div>`;
 }
@@ -897,7 +978,7 @@ async function deviceView() {
   const [devices, jobs] = await Promise.all([api.devices(), api.printJobs()]);
   const current = devices.items[0];
   return `<section class="page device-page" id="device-view">
-    ${pageHead("HARDWARE", "设备中心", "管理 Letter 自动打印、设备状态和耗材安全。", `<button class="outline-button" data-open-simulator>${icon("device", 16)}打开模拟器</button>`)}
+    ${pageHead(t("device.eyebrow"), t("device.title"), t("device.subtitle"), `<button class="outline-button" data-open-simulator>${icon("device", 16)}${t("device.open_simulator")}</button>`)}
     <article class="device-hero">
       <div class="device-stage"><span class="device-online"><i></i>${ui.simulatorConnected ? "Simulator Live" : current.status}</span><div class="device-large"><span></span><div><i></i><i></i><b></b></div></div><span class="device-shadow"></span></div>
       <div class="device-overview">
@@ -932,24 +1013,24 @@ async function deviceView() {
 function memoryPhotoCard(photo) {
   const sourceLabel = imagePhotoSourceLabel(photo.source);
   return `<article class="memory-photo-card">
-    <img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 的热敏像素预览">
-    <div><strong>${escapeHtml(photo.title)}</strong><span>${sourceLabel} · ${formatTime(photo.createdAt)}</span><small>${photo.processed.width}×${photo.processed.height} · ${escapeHtml(photo.processed.processor)}</small></div>
+    <img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 的热敏打印预览">
+    <div><strong>${escapeHtml(photo.title)}</strong><span>${sourceLabel} · ${formatTime(photo.createdAt)}</span><small>${photo.processed.width}×${photo.processed.height} · 清晰热敏照片</small></div>
   </article>`;
 }
 
 function imagePhotoSourceLabel(source) {
   return {
-    camera: "电脑摄像头",
-    upload: "本地上传",
-    letter: "信件附件",
-    hardware: "硬件拍摄"
-  }[source] ?? "图片";
+    camera: t("image.source.camera"),
+    upload: t("image.source.upload"),
+    letter: t("image.source.letter"),
+    hardware: t("image.source.hardware")
+  }[source] ?? t("image.source.default");
 }
 
 function imageStudioCard(photo, selectedId) {
   return `<article class="image-studio-card ${photo.id === selectedId ? "selected" : ""}">
     <button type="button" data-select-image="${photo.id}" aria-label="选择 ${escapeHtml(photo.title)}">
-      <img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 热敏像素预览">
+      <img src="${photo.processed.previewDataUrl}" alt="${escapeHtml(photo.title)} 热敏打印预览">
     </button>
     <div>
       <strong>${escapeHtml(photo.title)}</strong>
@@ -1010,7 +1091,7 @@ async function imageStudioView() {
       <article class="image-preview-card">
         <div class="card-head"><div><p class="eyebrow">THERMAL PREVIEW</p><h2>打印预览</h2></div>${selected ? `<span>${selected.processed.width}×${selected.processed.height}</span>` : ""}</div>
         ${selected ? `<figure class="image-thermal-paper"><img src="${selected.processed.previewDataUrl}" alt="${escapeHtml(selected.title)} 打印预览"></figure>
-          <div class="image-preview-meta"><strong>${escapeHtml(selected.title)}</strong><span>${imagePhotoSourceLabel(selected.source)} · ${escapeHtml(selected.processed.processor)}</span></div>
+          <div class="image-preview-meta"><strong>${escapeHtml(selected.title)}</strong><span>${imagePhotoSourceLabel(selected.source)} · 清晰热敏照片</span></div>
           <div class="image-preview-actions">
             <button type="button" class="outline-button" data-image-to-letter="${selected.id}">${icon("letter", 16)}加入信件</button>
             <button type="button" class="primary-button" data-print-image="${selected.id}">${icon("printer", 16)}打印照片</button>
@@ -1188,31 +1269,31 @@ async function adminView() {
 }
 
 const VOICE_STATE_COPY = {
-  off: ["语音已关闭", "打开语音总控后，我会在这里等你。"],
-  idle: ["待机", "准备好了，随时可以开始说话。"],
-  listening: ["聆听中", "可以自然停顿，我会等约 4 秒再提交。"],
-  recognizing: ["识别中", "正在把声音变成文字。"],
-  thinking: ["思考中", "正在理解你的意图。"],
-  executing: ["执行中", "正在调用系统或设备能力。"],
-  completed: ["已完成", "这轮操作已经完成。"],
-  error: ["执行失败", "没有关系，可以再试一次。"],
-  offline: ["设备离线", "AI 对话仍可使用，硬件操作会暂停。"]
+  off: () => [t("voice.state_off"), t("voice.state_off_desc")],
+  idle: () => [t("voice.state_idle"), t("voice.state_idle_desc")],
+  listening: () => [t("voice.state_listening"), t("voice.state_listening_desc")],
+  recognizing: () => [t("voice.state_recognizing"), t("voice.state_recognizing_desc")],
+  thinking: () => [t("voice.state_thinking"), t("voice.state_thinking_desc")],
+  executing: () => [t("voice.state_executing"), t("voice.state_executing_desc")],
+  completed: () => [t("voice.state_completed"), t("voice.state_completed_desc")],
+  error: () => [t("voice.state_error"), t("voice.state_error_desc")],
+  offline: () => [t("voice.state_offline"), t("voice.state_offline_desc")]
 };
 
-const VOICE_EXAMPLES = [
-  "我要玩海龟汤",
-  "打印刚才的对话",
-  "帮我写一封信并打印",
-  "小P，帮我给小李传个话",
-  "发邮件给妈妈",
-  "打印系统刚才的回答",
-  "拍一张照片",
-  "打开设备状态",
-  "调高音量",
-  "把屏幕亮度调低一点",
-  "进入聊天模式",
-  "退出聊天模式",
-  "重新打印上一条内容"
+const VOICE_EXAMPLES = () => [
+  t("voice.ex.turtle"),
+  t("voice.ex.print_conv"),
+  t("voice.ex.write_print"),
+  t("voice.ex.message_xiaoli"),
+  t("voice.ex.email_mom"),
+  t("voice.ex.print_answer"),
+  t("voice.ex.take_photo"),
+  t("voice.ex.device_status"),
+  t("voice.ex.volume_up"),
+  t("voice.ex.brightness_down"),
+  t("voice.ex.enter_chat"),
+  t("voice.ex.exit_chat"),
+  t("voice.ex.reprint_last")
 ];
 
 function voiceAssistantFace(state = "off") {
@@ -1234,9 +1315,9 @@ function voiceAssistantFace(state = "off") {
 
 function printStatusLabel(status) {
   return {
-    WAITING: "等待打印", SENDING: "正在发送", PRINTING: "正在打印",
-    SUCCESS: "打印成功", FAILED: "打印失败", NOT_PRINTED: "未打印"
-  }[status] ?? status ?? "未打印";
+    WAITING: t("prints.status.WAITING"), SENDING: t("prints.status.SENDING"), PRINTING: t("prints.status.PRINTING"),
+    SUCCESS: t("prints.status.SUCCESS"), FAILED: t("prints.status.FAILED"), NOT_PRINTED: t("prints.status.NOT_PRINTED")
+  }[status] ?? status ?? t("prints.status.NOT_PRINTED");
 }
 
 function conversationActions(conversation, compact = false) {
@@ -1316,11 +1397,11 @@ async function unifiedControlView() {
   ui.unifiedPrintJobs = data.printJobs;
   if (!ui.voiceEnabled && !ui.unifiedBusy) ui.voiceState = "off";
   if (ui.voiceEnabled && ui.voiceState === "off") ui.voiceState = "idle";
-  const stateCopy = VOICE_STATE_COPY[ui.voiceState] ?? VOICE_STATE_COPY.idle;
+  const stateCopy = (VOICE_STATE_COPY[ui.voiceState] ?? VOICE_STATE_COPY.idle)();
   const conversation = ui.unifiedConversation ?? data.conversations[0] ?? null;
   return `<section class="page unified-control-page">
     <header class="control-welcome">
-      <div><p class="eyebrow">PRINTPAL VOICE CENTER</p><h1>${escapeHtml(ui.currentUser.displayName)}，今天想让小P做什么？</h1><p>说话、理解、执行、展示，再由你决定是否打印。</p></div>
+      <div><p class="eyebrow">${t("voice.welcome_eyebrow")}</p><h1>${t("voice.welcome_title", { name: escapeHtml(ui.currentUser.displayName) })}</h1><p>${t("voice.welcome_sub")}</p></div>
       ${!ui.currentUser.emailVerified ? `<div class="verification-banner">${icon("shield", 17)}<span><b>邮箱尚未验证</b><small>验证后可以安全找回账号并接收设备通知。</small></span><button data-request-verification>发送验证邮件</button></div>` : ""}
     </header>
     <article class="voice-command-stage state-${ui.voiceState}">
@@ -1329,42 +1410,42 @@ async function unifiedControlView() {
         <div class="voice-state-text"><span class="state-dot"></span><h2>${stateCopy[0]}</h2><p>${stateCopy[1]}</p></div>
         <button class="listen-main-button" type="button" data-unified-listen ${!ui.voiceEnabled || ui.unifiedBusy ? "disabled" : ""}>
           ${icon(ui.voiceState === "listening" ? "pause" : "mic", 21)}
-          <span>${ui.voiceState === "listening" ? "停止聆听" : ui.voiceEnabled ? "开始聆听" : "请先开启语音"}</span>
+          <span>${ui.voiceState === "listening" ? t("voice.listen_stop") : ui.voiceEnabled ? t("voice.listen_start") : t("voice.listen_disabled")}</span>
         </button>
       </div>
       <div class="voice-live-panel">
-        <div class="live-panel-head"><div><p class="eyebrow">LIVE SESSION</p><h2>本轮交互</h2></div><span>${ui.unifiedBusy ? "处理中" : "READY"}</span></div>
+        <div class="live-panel-head"><div><p class="eyebrow">${t("voice.live_session")}</p><h2>${t("voice.live_session_title")}</h2></div><span>${ui.unifiedBusy ? t("voice.live_processing") : "READY"}</span></div>
         <div class="live-transcript">
-          <small>语音识别文字</small>
-          <p data-live-transcript>${escapeHtml(ui.unifiedInterim || ui.unifiedTranscript || conversation?.userText || "开始说话后，识别结果会实时显示在这里。")}</p>
+          <small>${t("voice.live_transcript_label")}</small>
+          <p data-live-transcript>${escapeHtml(ui.unifiedInterim || ui.unifiedTranscript || conversation?.userText || t("voice.live_transcript_placeholder"))}</p>
         </div>
         <div class="live-response">
           <span>${icon("spark", 16)}</span>
-          <div><small>小P回复</small><p>${escapeHtml(conversation?.assistantText || "我会先理解你的意图，再执行设备或打印操作。")}</p></div>
+          <div><small>${t("voice.live_response_label")}</small><p>${escapeHtml(conversation?.assistantText || t("voice.live_response_default"))}</p></div>
         </div>
         <div class="live-execution ${conversation?.executionResult?.status?.toLowerCase() ?? ""}">
           <span>${icon(conversation?.executionResult?.status === "FAILED" ? "close" : "check", 16)}</span>
-          <div><small>指令执行结果</small><p>${escapeHtml(conversation?.executionResult?.message || "等待新的指令。")}</p></div>
+          <div><small>${t("voice.live_exec_label")}</small><p>${escapeHtml(conversation?.executionResult?.message || t("voice.live_exec_default"))}</p></div>
         </div>
         ${unifiedTurtleGame(conversation?.turtleGame)}
         ${unifiedLetterDraft(conversation?.letterDraft)}
         ${conversationActions(conversation)}
         <form id="unified-command-form" class="unified-command-form">
-          <input name="transcript" maxlength="1500" value="${escapeHtml(ui.unifiedTranscript)}" placeholder="麦克风不可用时，可以在这里输入指令" ${ui.unifiedBusy ? "disabled" : ""} required>
-          <button type="submit" class="primary-button" ${ui.unifiedBusy ? "disabled" : ""}>${ui.unifiedBusy ? "处理中…" : "发送"}${icon("arrow", 15)}</button>
+          <input name="transcript" maxlength="1500" value="${escapeHtml(ui.unifiedTranscript)}" placeholder="${t("voice.input_placeholder")}" ${ui.unifiedBusy ? "disabled" : ""} required>
+          <button type="submit" class="primary-button" ${ui.unifiedBusy ? "disabled" : ""}>${ui.unifiedBusy ? t("voice.sending") : t("voice.send")}${icon("arrow", 15)}</button>
         </form>
       </div>
     </article>
     <section class="voice-example-section">
-      <div class="section-head"><div><p class="eyebrow">TRY SAYING</p><h2>可以这样对我说</h2></div></div>
-      <div class="voice-example-list">${VOICE_EXAMPLES.map((example) => `<button type="button" data-voice-example="${escapeHtml(example)}" aria-label="${escapeHtml(example)}"><span>${icon("mic", 14)}</span>${escapeHtml(example)}</button>`).join("")}</div>
+      <div class="section-head"><div><p class="eyebrow">${t("voice.examples_title")}</p><h2>${t("voice.try_saying")}</h2></div></div>
+      <div class="voice-example-list">${VOICE_EXAMPLES().map((example) => `<button type="button" data-voice-example="${escapeHtml(example)}" aria-label="${escapeHtml(example)}"><span>${icon("mic", 14)}</span>${escapeHtml(example)}</button>`).join("")}</div>
     </section>
   </section>`;
 }
 
 function updateUnifiedInteractionState() {
   if (currentPath() !== "/") return;
-  const stateCopy = VOICE_STATE_COPY[ui.voiceState] ?? VOICE_STATE_COPY.idle;
+  const stateCopy = (VOICE_STATE_COPY[ui.voiceState] ?? VOICE_STATE_COPY.idle)();
   const stage = document.querySelector(".voice-command-stage");
   if (stage) stage.className = `voice-command-stage state-${ui.voiceState}`;
   const assistant = document.querySelector(".unified-assistant");
@@ -1374,10 +1455,10 @@ function updateUnifiedInteractionState() {
   const listenButton = document.querySelector("[data-unified-listen]");
   if (listenButton) {
     listenButton.disabled = ui.unifiedBusy;
-    listenButton.innerHTML = `${icon(ui.voiceState === "listening" ? "pause" : "mic", 21)}<span>${ui.voiceState === "listening" ? "停止聆听" : "开始聆听"}</span>`;
+    listenButton.innerHTML = `${icon(ui.voiceState === "listening" ? "pause" : "mic", 21)}<span>${ui.voiceState === "listening" ? t("voice.listen_stop") : t("voice.listen_start")}</span>`;
   }
   const sessionStatus = document.querySelector(".live-panel-head > span");
-  if (sessionStatus) sessionStatus.textContent = ui.unifiedBusy ? "处理中" : ui.voiceState === "listening" ? "聆听中" : "READY";
+  if (sessionStatus) sessionStatus.textContent = ui.unifiedBusy ? t("voice.live_processing") : ui.voiceState === "listening" ? t("voice.state_listening") : "READY";
   const liveTranscript = document.querySelector("[data-live-transcript]");
   if (liveTranscript && (ui.unifiedInterim || ui.unifiedTranscript)) {
     liveTranscript.textContent = ui.unifiedInterim || ui.unifiedTranscript;
@@ -1391,23 +1472,23 @@ function updateUnifiedInteractionState() {
   }
   if (submit) {
     submit.disabled = ui.unifiedBusy;
-    submit.innerHTML = `${ui.unifiedBusy ? "处理中…" : "发送"}${icon("arrow", 15)}`;
+    submit.innerHTML = `${ui.unifiedBusy ? t("voice.sending") : t("voice.send")}${icon("arrow", 15)}`;
   }
 }
 
 async function conversationsView() {
   const data = await api.voiceConversations();
-  return `<section class="page records-page">${pageHead("CONVERSATION HISTORY", "对话记录", "这里只展示当前账号产生的语音与文字交互。")}
-    <div class="records-toolbar"><span>${icon("shield", 15)}按当前用户隔离</span><b>${data.items.length} 轮对话</b></div>
-    <div class="conversation-record-grid">${data.items.map((item) => conversationCard(item)).join("") || '<div class="control-empty large">还没有对话记录，去语音控制中心说第一句话吧。</div>'}</div>
+  return `<section class="page records-page">${pageHead(t("conv.eyebrow"), t("conv.title"), t("conv.subtitle"))}
+    <div class="records-toolbar"><span>${icon("shield", 15)}${t("conv.user_isolated")}</span><b>${t("conv.count", { count: data.items.length })}</b></div>
+    <div class="conversation-record-grid">${data.items.map((item) => conversationCard(item)).join("") || `<div class="control-empty large">${t("conv.empty")}</div>`}</div>
   </section>`;
 }
 
 async function printsView() {
   const data = await api.voicePrintJobs();
-  return `<section class="page records-page">${pageHead("PRINT HISTORY", "打印记录", "查看等待、发送、打印成功和失败任务；失败任务可以安全重试。")}
-    <div class="records-toolbar"><span>${icon("shield", 15)}command_id 防止重复打印</span><b>${data.items.length} 个任务</b></div>
-    <div class="print-record-list">${data.items.map(printJobCard).join("") || '<div class="control-empty large">还没有打印任务。</div>'}</div>
+  return `<section class="page records-page">${pageHead(t("prints.eyebrow"), t("prints.title"), t("prints.subtitle"))}
+    <div class="records-toolbar"><span>${icon("shield", 15)}${t("prints.dedup_note")}</span><b>${t("prints.count", { count: data.items.length })}</b></div>
+    <div class="print-record-list">${data.items.map(printJobCard).join("") || `<div class="control-empty large">${t("prints.empty")}</div>`}</div>
   </section>`;
 }
 
@@ -1415,14 +1496,28 @@ async function controlDeviceView() {
   const data = await api.voiceBootstrap();
   ui.unifiedDevice = data.device;
   const current = data.device;
-  return `<section class="page control-device-page">${pageHead("DEVICE GATEWAY", "设备管理", "浏览器只连接平台 API；ESP32 地址和长期凭证不会进入前端。")}
+  return `<section class="page control-device-page">${pageHead(t("ctrl_device.eyebrow"), t("ctrl_device.title"), t("ctrl_device.subtitle"))}
     <article class="control-device-hero ${current.status === "ONLINE" ? "online" : "offline"}">
       ${voiceAssistantFace(current.status === "ONLINE" ? "idle" : "offline")}
-      <div><p class="eyebrow">ESP32-S3 DESKTOP COMPANION</p><h2>${escapeHtml(current.displayName)}</h2><p>${current.status === "ONLINE" ? "设备在线，可以接收语音指令。" : current.status === "UNBOUND" ? "当前账号还没有绑定设备。" : "设备离线，硬件指令将被禁用。"}</p>
+      <div><p class="eyebrow">ESP32-S3 DESKTOP COMPANION</p><h2>${escapeHtml(current.displayName)}</h2><p>${current.status === "ONLINE" ? t("ctrl_device.online") : current.status === "UNBOUND" ? t("ctrl_device.unbound") : t("ctrl_device.offline")}</p>
         <div class="device-facts"><span><b>状态</b><small>${escapeHtml(current.status)}</small></span><span><b>网络</b><small>${escapeHtml(current.wifi)}</small></span><span><b>打印机</b><small>${escapeHtml(current.printer.status)}</small></span><span><b>电量</b><small>${current.battery ?? "--"}%</small></span><span><b>音量</b><small>${current.volume ?? "--"}%</small></span><span><b>亮度</b><small>${current.brightness ?? "--"}%</small></span></div>
       </div>
     </article>
-    <div class="device-security-note">${icon("shield", 18)}<div><h3>设备连接由 Device Gateway 管理</h3><p>网页不会硬编码局域网 IP，也不会直接连接 MQTT 或打印机。设备离线时不会显示虚假成功状态。</p></div></div>
+    <article class="hardware-bridge-card ${ui.hardwareConnected ? "connected" : "disconnected"}">
+      <div class="card-head"><div><p class="eyebrow">HARDWARE BRIDGE</p><h2>${t("ctrl_device.bridge_title")}</h2></div><span class="hardware-bridge-badge ${ui.hardwareConnected ? "connected" : "disconnected"}">${ui.hardwareConnected ? t("ctrl_device.bridge_connected") : t("ctrl_device.bridge_disconnected")}</span></div>
+      <div class="hardware-bridge-body">
+        <div class="hardware-bridge-status-row">
+          <span class="hardware-dot ${ui.hardwareConnected ? "connected" : "disconnected"}"></span>
+          <span>${ui.hardwareConnected ? t("ctrl_device.bridge_connected_desc") : t("ctrl_device.bridge_disconnected_desc")}</span>
+        </div>
+        <div class="hardware-bridge-facts">
+          <span><b>${t("ctrl_device.bridge_status")}</b><small>${escapeHtml(ui.hardwareBridgeStatus)}</small></span>
+          <span><b>${t("ctrl_device.voice_path")}</b><small>${ui.hardwareConnected ? t("ctrl_device.voice_hw") : t("ctrl_device.voice_browser")}</small></span>
+          <span><b>${t("ctrl_device.photo_path")}</b><small>${ui.hardwareConnected ? t("ctrl_device.photo_hw") : t("ctrl_device.photo_browser")}</small></span>
+        </div>
+      </div>
+    </article>
+    <div class="device-security-note">${icon("shield", 18)}<div><h3>${t("ctrl_device.security_title")}</h3><p>${t("ctrl_device.security_desc")}</p></div></div>
   </section>`;
 }
 
@@ -1441,9 +1536,9 @@ async function accountView() {
 
 function welcomeView() {
   return `<div class="public-welcome">
-    <header><button class="hub-logo" data-nav="/welcome">${logo()}</button><div><button data-nav="/login">登录</button><button class="primary-button" data-nav="/register">免费注册</button></div></header>
-    <main><div class="welcome-copy"><p class="eyebrow">VOICE · AI · ESP32 · PRINT</p><h1>说一句话，<br>让小P理解并行动。</h1><p>PrintPal 把语音对话、ESP32 硬件和热敏打印统一在一个安全的控制中心里。</p><div><button class="primary-button" data-nav="/register">创建账号${icon("arrow", 16)}</button><button class="outline-button" data-nav="/login">已有账号</button></div></div><div class="welcome-assistant">${voiceAssistantFace("listening")}<span>“打印系统刚才的回答”</span></div></main>
-    <section>${[["mic","统一语音控制","从一个入口控制 AI、设备与打印"],["device","ESP32 联动","设备状态与动作结果清晰可见"],["printer","确认后打印","所有实体输出都经过平台任务队列"]].map(([name,title,detail])=>`<article><i>${icon(name,21)}</i><h2>${title}</h2><p>${detail}</p></article>`).join("")}</section>
+    <header><button class="hub-logo" data-nav="/welcome">${logo()}</button><div><button data-nav="/login">${t("auth.login_btn")}</button><button class="primary-button" data-nav="/register">${t("auth.register_btn")}</button></div></header>
+    <main><div class="welcome-copy"><p class="eyebrow">${t("welcome.eyebrow")}</p><h1>${t("welcome.title")}</h1><p>${t("welcome.desc")}</p><div><button class="primary-button" data-nav="/register">${t("welcome.create_account")}${icon("arrow", 16)}</button><button class="outline-button" data-nav="/login">${t("welcome.has_account")}</button></div></div><div class="welcome-assistant">${voiceAssistantFace("listening")}<span>"${t("voice.ex.print_answer")}"</span></div></main>
+    <section>${[["mic", t("welcome.feat1_title"), t("welcome.feat1_desc")], ["device", t("welcome.feat2_title"), t("welcome.feat2_desc")], ["printer", t("welcome.feat3_title"), t("welcome.feat3_desc")]].map(([name,title,detail])=>`<article><i>${icon(name,21)}</i><h2>${title}</h2><p>${detail}</p></article>`).join("")}</section>
   </div>`;
 }
 
@@ -1453,15 +1548,15 @@ function authView(type) {
   const forgot = type === "forgot-password";
   const reset = type === "reset-password";
   const resetToken = new URLSearchParams(location.search).get("token") ?? "";
-  const heading = login ? "欢迎回来。" : register ? "创建你的 PrintPal 账号。" : forgot ? "找回密码。" : "设置新密码。";
-  const description = login ? "登录后进入统一语音控制中心。" : register ? "使用邮箱和密码开始连接你的桌面设备。" : forgot ? "输入注册邮箱，我们会发送重置链接。" : "新密码至少 8 位，并同时包含字母和数字。";
+  const heading = login ? t("auth.login_heading") : register ? t("auth.register_heading") : forgot ? t("auth.forgot_heading") : t("auth.reset_heading");
+  const description = login ? t("auth.login_desc") : register ? t("auth.register_desc") : forgot ? t("auth.forgot_desc") : t("auth.reset_desc");
   return `<div class="auth-page">
     <section class="auth-story">
       <button class="hub-logo light" data-nav="/welcome">${logo()}</button>
       <div class="auth-story-main">
         <div class="auth-story-device">${voiceAssistantFace("idle")}<span><i></i>VOICE READY</span></div>
-        <div class="auth-story-copy"><p class="eyebrow">YOUR DESKTOP, NOW LISTENING</p><h1>一句话，<br>让桌面开始行动。</h1><p>对话、设备控制与热敏打印，现在汇聚在同一个语音入口。</p></div>
-        <div class="auth-capability-row"><span>${icon("mic", 16)}语音理解</span><span>${icon("device", 16)}设备控制</span><span>${icon("printer", 16)}确认打印</span></div>
+        <div class="auth-story-copy"><p class="eyebrow">YOUR DESKTOP, NOW LISTENING</p><h1>${t("auth.story_title")}</h1><p>${t("auth.story_desc")}</p></div>
+        <div class="auth-capability-row"><span>${icon("mic", 16)}${t("auth.cap_voice")}</span><span>${icon("device", 16)}${t("auth.cap_device")}</span><span>${icon("printer", 16)}${t("auth.cap_print")}</span></div>
       </div>
       <span>VOICE · AI · ESP32 · PRINT</span>
     </section>
@@ -1472,7 +1567,7 @@ function authView(type) {
       ${register ? `<label class="terms-check"><input name="acceptTerms" type="checkbox"><i>${icon("check", 12)}</i><span>我已阅读并同意<a href="#terms">用户协议</a>和<a href="#privacy">隐私政策</a></span></label><small data-field-error="acceptTerms"></small>` : ""}
       ${login ? `<div class="login-options"><label><input name="remember" type="checkbox">记住我</label><button type="button" data-nav="/forgot-password">忘记密码？</button></div>` : ""}
       <div class="auth-form-error" data-auth-error hidden></div>
-      <button class="primary-button full" type="submit">${login ? "登录" : register ? "创建账号" : forgot ? "发送重置邮件" : "重置密码"}${icon("arrow", 16)}</button>
+      <button class="primary-button full" type="submit">${login ? t("auth.login_btn") : register ? t("auth.register_btn") : forgot ? t("auth.forgot_btn") : t("auth.reset_btn")}${icon("arrow", 16)}</button>
       ${login ? `<div class="demo-account-panel"><span>本地快速体验</span><div>
         ${[
           ["林", "林安", "hello@aihub.local", "Demo1234"],
@@ -1480,7 +1575,7 @@ function authView(type) {
           ["M", "Mina", "mina@aihub.local", "Mina1234"]
         ].map(([avatar, name, email, password]) => `<button type="button" data-demo-account data-email="${email}" data-password="${password}"><i>${avatar}</i><span><b>${name}</b><small>${email}</small></span></button>`).join("")}
       </div></div>` : ""}
-      ${forgot || reset ? '<p class="auth-switch"><button type="button" data-nav="/login">返回登录</button></p>' : `<p class="auth-switch">${login ? "还没有账号？" : "已经有账号？"}<button type="button" data-nav="${login ? "/register" : "/login"}">${login ? "立即注册" : "去登录"}</button></p>`}
+      ${forgot || reset ? `<p class="auth-switch"><button type="button" data-nav="/login">${t("auth.login_now")}</button></p>` : `<p class="auth-switch">${login ? t("auth.no_account") : t("auth.has_account")}<button type="button" data-nav="${login ? "/register" : "/login"}">${login ? t("auth.register_now") : t("auth.login_now")}</button></p>`}
     </form></section>
   </div>`;
 }
@@ -1491,12 +1586,12 @@ async function render() {
   if (path !== "/images") stopImageCamera();
   if (path !== "/sleep") stopSleepTicker();
   const titles = {
-    "/": "语音控制中心", "/welcome": "欢迎", "/conversations": "对话记录", "/prints": "打印记录",
-    "/device": "设备管理", "/account": "账号设置", "/login": "登录", "/register": "注册",
-    "/forgot-password": "忘记密码", "/reset-password": "重置密码",
-    "/community": "社区广场", "/create-post": "发布内容", "/match": "匹配中心",
-    "/match/preferences": "匹配偏好", "/letter": "我的信件", "/letter/create": "写信",
-    "/profile": "个人主页", "/images": "图像打印", "/sleep": "智能睡眠"
+    "/": t("title.voice"), "/welcome": t("title.welcome"), "/conversations": t("title.conversations"), "/prints": t("title.prints"),
+    "/device": t("title.device"), "/account": t("title.account"), "/login": t("title.login"), "/register": t("title.register"),
+    "/forgot-password": t("title.forgot_password"), "/reset-password": t("title.reset_password"),
+    "/community": t("title.community"), "/create-post": t("title.create_post"), "/match": t("title.match"),
+    "/match/preferences": t("title.match_preferences"), "/letter": t("title.letter"), "/letter/create": t("title.letter_create"),
+    "/profile": t("title.profile"), "/images": t("title.images"), "/sleep": t("title.sleep")
   };
   document.title = `${titles[path] ?? "PrintPal"} · PrintPal`;
 
@@ -1564,13 +1659,19 @@ async function render() {
   } catch (error) {
     if (version !== ui.renderVersion) return;
     const detail = error instanceof ApiProblem ? `${error.code} · ${error.message}` : error.message;
-    app.innerHTML = shell(`<div class="fatal-state">${icon("community", 32)}<h1>暂时无法连接社区</h1><p>${escapeHtml(detail)}</p><button class="primary-button" data-retry>重新加载</button></div>`, path);
+    app.innerHTML = shell(`<div class="fatal-state">${icon("community", 32)}<h1>${t("shell.fatal_title")}</h1><p>${escapeHtml(detail)}</p><button class="primary-button" data-retry>${t("shell.retry")}</button></div>`, path);
     wire();
   }
 }
 
 function wireNavigation() {
   document.querySelectorAll("[data-nav]").forEach((element) => element.addEventListener("click", () => navigate(element.dataset.nav)));
+  // Language switch handler
+  document.querySelectorAll("[data-lang-toggle]").forEach((element) => element.addEventListener("click", () => {
+    const newLang = getLanguage() === "zh" ? "en" : "zh";
+    setLanguage(newLang);
+    render();
+  }));
   const setMobileMenu = (open) => {
     document.querySelector(".mobile-more-sheet")?.classList.toggle("open", open);
     document.querySelector(".mobile-more-backdrop")?.classList.toggle("open", open);
@@ -2154,6 +2255,15 @@ async function processVoiceCommand(transcript) {
 }
 
 function startVoiceRecognition() {
+  // 硬件已连接时，语音通过 ESP32 麦克风自动处理，只需更新 UI。
+  if (shouldUseHardwareMic()) {
+    ui.voiceListening = true;
+    document.querySelector(".voice-agent-card")?.classList.add("listening");
+    document.querySelector(".voice-agent-status h2")?.replaceChildren("硬件聆听中");
+    companionStore.dispatch({ type: "device.transition", event: "listen" });
+    toast("硬件聆听中 · 正在通过 ESP32 麦克风采集语音…", "default");
+    return;
+  }
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!Recognition) {
     toast("当前浏览器不支持语音识别，请在输入框中输入指令", "error");
@@ -2254,6 +2364,15 @@ function startUnifiedRecognition() {
   }
   if (!ui.voiceEnabled) {
     toast("请先开启语音总控");
+    return;
+  }
+  // 硬件已连接时，语音通过 ESP32 麦克风 → ASR → 事件流自动处理。
+  // 前端只需进入“聆听中”状态，转写结果会由服务端桥接回调推入对话。
+  if (shouldUseHardwareMic()) {
+    ui.voiceState = "listening";
+    ui.unifiedInterim = "";
+    updateUnifiedInteractionState();
+    toast("硬件聆听中 · 正在通过 ESP32 麦克风采集语音…", "default");
     return;
   }
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -2936,7 +3055,7 @@ function wire() {
     if (!file) return;
     try {
       await api.uploadPhoto(file, { source: "upload", purpose: "memory", title: file.name });
-      toast("照片已加入回忆相册，并自动生成热敏像素版本", "success");
+      toast("照片已加入回忆相册，并生成清晰热敏预览", "success");
       render();
     } catch (error) {
       toast(`上传失败：${error.message}`, "error");
@@ -2971,7 +3090,7 @@ function wire() {
       ui.letterAttachment = result.photo;
       updateLetterAttachmentPreview(letterForm);
       previewLetter(letterForm);
-      toast("照片已处理成热敏像素风格", "success");
+      toast("照片已生成清晰热敏预览", "success");
     } catch (error) {
       toast(`照片处理失败：${error.message}`, "error");
     } finally {
@@ -3103,4 +3222,5 @@ window.addEventListener("aihub:auth-expired", () => {
 
 render();
 bus.send("web.hello", { client: "ai-hub-os-web", version: "0.5.0" });
+startHardwareBridgePolling();
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.audio.keyword_asr import KeywordASRProcessor
@@ -80,87 +81,101 @@ def build_daemon(
     event_bus = EventBus(config.perception.event_cache_capacity)
     latest_frame_store = LatestFrameStore()
     photo_manager = None
-
-    if audio_enabled:
-        if not config.vad.enabled:
-            raise ConfigurationError("hardware audio requires vad.enabled=true")
-        audio_source = TCPPCMAudioSource(
-            args.audio_host or config.hardware.audio_host,
-            (
-                args.audio_port
-                if args.audio_port is not None
-                else config.hardware.audio_port
-            ),
-            sample_rate=config.audio.target_sample_rate,
-            frame_samples=config.hardware.audio_frame_samples,
-            queue_size=config.hardware.audio_queue_size,
-        )
-        segmenter = StreamingAudioPipeline(
-            config.vad,
-            build_vad(config),
-            config.audio.target_sample_rate,
-        )
-        audio_processor = KeywordASRProcessor(
-            build_asr(config),
-            KeywordDetector(config.keywords),
-            session_id=session_id,
-        )
-
-    if vision_enabled:
-        if not config.vision.enabled:
-            raise ConfigurationError(
-                "hardware vision requires vision.enabled=true"
-            )
-        image_source = HTTPJPEGImageSource(
-            args.vision_host or config.hardware.vision_host,
-            (
-                args.vision_port
-                if args.vision_port is not None
-                else config.hardware.vision_port
-            ),
-            upload_path=config.hardware.vision_upload_path,
-            max_image_bytes=config.vision.max_image_bytes,
-            queue_size=1,
-            default_session_id=session_id,
-        )
-        gesture_backend = build_gesture(config)
-        vision_processor = ContinuousVisionProcessor(
-            config.vision,
-            config.perception,
-            gesture_backend,
-        )
-        if config.application.photo_enabled:
-            photo_manager = PhotoCaptureManager(
-                latest_frame_store,
-                delay_seconds=config.application.photo_delay_seconds,
-                max_frame_age_seconds=(
-                    config.application.photo_frame_max_age_seconds
-                ),
-                output_dir=config.application.photo_output_dir,
-                processor_url=config.application.photo_processor_url,
-                timeout_seconds=(
-                    config.application.downstream_timeout_seconds
-                ),
-            )
-
-    controller = ApplicationController(
-        default_language=config.application.default_language,
-        photo_manager=photo_manager,
+    vad_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vad")
+    asr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="asr")
+    vision_executor = ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="vision"
     )
 
-    daemon = PerceptionDaemon(
-        cache,
-        audio_source=audio_source,
-        audio_segmenter=segmenter,
-        audio_processor=audio_processor,
-        image_source=image_source,
-        vision_processor=vision_processor,
-        utterance_queue_size=config.perception.utterance_queue_size,
-        event_bus=event_bus,
-        application_controller=controller,
-        latest_frame_store=latest_frame_store,
-    )
-    return daemon, gesture_backend
+    try:
+        if audio_enabled:
+            if not config.vad.enabled:
+                raise ConfigurationError("hardware audio requires vad.enabled=true")
+            audio_source = TCPPCMAudioSource(
+                args.audio_host or config.hardware.audio_host,
+                (
+                    args.audio_port
+                    if args.audio_port is not None
+                    else config.hardware.audio_port
+                ),
+                sample_rate=config.audio.target_sample_rate,
+                frame_samples=config.hardware.audio_frame_samples,
+                queue_size=config.hardware.audio_queue_size,
+            )
+            segmenter = StreamingAudioPipeline(
+                config.vad,
+                build_vad(config, vad_executor),
+                config.audio.target_sample_rate,
+            )
+            audio_processor = KeywordASRProcessor(
+                build_asr(config, asr_executor),
+                KeywordDetector(config.keywords),
+                session_id=session_id,
+            )
+
+        if vision_enabled:
+            if not config.vision.enabled:
+                raise ConfigurationError(
+                    "hardware vision requires vision.enabled=true"
+                )
+            image_source = HTTPJPEGImageSource(
+                args.vision_host or config.hardware.vision_host,
+                (
+                    args.vision_port
+                    if args.vision_port is not None
+                    else config.hardware.vision_port
+                ),
+                upload_path=config.hardware.vision_upload_path,
+                max_image_bytes=config.vision.max_image_bytes,
+                queue_size=1,
+                default_session_id=session_id,
+            )
+            gesture_backend = build_gesture(config, vision_executor)
+            vision_processor = ContinuousVisionProcessor(
+                config.vision,
+                config.perception,
+                gesture_backend,
+            )
+            if config.application.photo_enabled:
+                photo_manager = PhotoCaptureManager(
+                    latest_frame_store,
+                    delay_seconds=config.application.photo_delay_seconds,
+                    max_frame_age_seconds=(
+                        config.application.photo_frame_max_age_seconds
+                    ),
+                    output_dir=config.application.photo_output_dir,
+                    processor_url=config.application.photo_processor_url,
+                    timeout_seconds=(
+                        config.application.downstream_timeout_seconds
+                    ),
+                )
+
+        controller = ApplicationController(
+            default_language=config.application.default_language,
+            photo_manager=photo_manager,
+        )
+
+        daemon = PerceptionDaemon(
+            cache,
+            audio_source=audio_source,
+            audio_segmenter=segmenter,
+            audio_processor=audio_processor,
+            image_source=image_source,
+            vision_processor=vision_processor,
+            utterance_queue_size=config.perception.utterance_queue_size,
+            event_bus=event_bus,
+            application_controller=controller,
+            latest_frame_store=latest_frame_store,
+            vad_executor=vad_executor,
+            asr_executor=asr_executor,
+            vision_executor=vision_executor,
+        )
+        return daemon, gesture_backend
+    except Exception:
+        vad_executor.shutdown(wait=False)
+        asr_executor.shutdown(wait=False)
+        vision_executor.shutdown(wait=False)
+        raise
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -199,6 +214,7 @@ async def run(args: argparse.Namespace) -> None:
             await daemon.application_controller.aclose()
         if gesture_backend is not None:
             await gesture_backend.close()
+        await daemon.aclose()
         LOGGER.info("perception runtime stopped health=%s", daemon.health())
 
 

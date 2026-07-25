@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: docs_and_specs
+title: 项目文档与规格说明（AI Hub OS / MIMO）
+scope:
+    - docs/
+    - AI_Hardware_Community_Project/
+source_files: []
+depends_on: []
+related_to: []

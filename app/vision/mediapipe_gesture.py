@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ class MediaPipeGestureBackend(GestureBackend):
         model_path: Path | str,
         score_threshold: float = 0.7,
         max_hands: int = 2,
+        executor: ThreadPoolExecutor | None = None,
     ) -> None:
         path = Path(model_path)
         if not path.is_file():
@@ -47,6 +49,7 @@ class MediaPipeGestureBackend(GestureBackend):
             )
         except Exception as exc:
             raise VisionError("gesture_model_load_error") from exc
+        self._executor = executor
 
     def _recognize_sync(
         self, rgb_image: np.ndarray
@@ -80,6 +83,11 @@ class MediaPipeGestureBackend(GestureBackend):
     async def recognize(
         self, rgb_image: np.ndarray
     ) -> list[GestureDetection]:
+        if self._executor is not None:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                self._executor, self._recognize_sync, rgb_image
+            )
         return await asyncio.to_thread(self._recognize_sync, rgb_image)
 
     async def close(self) -> None:

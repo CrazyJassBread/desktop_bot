@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from typing import Final
 
@@ -52,6 +53,9 @@ class PerceptionDaemon:
         event_bus: EventBus | None = None,
         application_controller: object | None = None,
         latest_frame_store: LatestFrameStore | None = None,
+        vad_executor: ThreadPoolExecutor | None = None,
+        asr_executor: ThreadPoolExecutor | None = None,
+        vision_executor: ThreadPoolExecutor | None = None,
     ) -> None:
         audio_parts = (audio_source, audio_segmenter, audio_processor)
         if any(item is not None for item in audio_parts) and not all(
@@ -77,6 +81,9 @@ class PerceptionDaemon:
         self.metrics = PerceptionMetrics()
         self.running = False
         self._event_sequence = 0
+        self._vad_executor = vad_executor
+        self._asr_executor = asr_executor
+        self._vision_executor = vision_executor
         if self.application_controller is not None:
             getattr(
                 self.application_controller,
@@ -108,6 +115,7 @@ class PerceptionDaemon:
                 self._utterances.put_nowait(utterance)
             except asyncio.QueueFull:
                 self.metrics.audio_utterances_dropped += 1
+                LOGGER.warning("utterance queue full; dropping utterance")
         await self._utterances.put(_END)
 
     async def _recognize_audio(self) -> None:
@@ -183,3 +191,13 @@ class PerceptionDaemon:
         if callable(diagnostics):
             result["audio"] = diagnostics()
         return result
+
+    async def aclose(self) -> None:
+        """Shut down dedicated backends and thread pools."""
+        for executor in (
+            self._vad_executor,
+            self._asr_executor,
+            self._vision_executor,
+        ):
+            if executor is not None:
+                executor.shutdown(wait=False)

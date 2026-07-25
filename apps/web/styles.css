@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   color-scheme: light;
   --ink: #20221f;
   --muted: #73776f;
@@ -59,6 +59,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .desktop-nav button.active::after { background: var(--ink); }
 .nav-count { position: absolute; top: 14px; right: 4px; display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; color: #fff; background: #d06d5e; font-size: 6px; font-style: normal; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
+.lang-switch {
+  flex: 0 0 auto;
+  height: 33px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255,255,255,.68);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .04em;
+  cursor: pointer;
+  transition: .16s ease;
+  white-space: nowrap;
+}
+.lang-switch:hover { background: #fff; border-color: var(--ink); }
+.lang-switch:active { transform: scale(.97); }
 .top-search { display: flex; align-items: center; gap: 7px; min-width: 105px; height: 35px; padding: 0 10px; border: 1px solid var(--line); border-radius: 11px; background: rgba(255,255,255,.68); color: var(--muted); font-size: 8px; text-align: left; }
 .top-search span { flex: 1; }.top-search kbd { color: var(--faint); font: 7px ui-monospace, monospace; }
 .create-button { display: flex; align-items: center; gap: 6px; height: 35px; padding: 0 13px; border-radius: 11px; color: #fff; background: var(--ink); font-size: 9px; font-weight: 750; }
@@ -352,4 +369,32 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .memory-photo-card img,
 .letter-photo-uploader figure img,
 .letter-paper-photo{image-rendering:auto}
+
+/* Hardware bridge status indicator (ESP32 desktop_bot WebSocket bridge) */
+.hardware-status{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:#eceee8;font-size:11px;font-weight:600;color:#687068;white-space:nowrap;transition:.2s}
+.hardware-status.connected{background:#dceadd;color:#3d6b42}
+.hardware-dot{width:8px;height:8px;border-radius:50%;background:#bcc1ba;flex-shrink:0;transition:.2s}
+.hardware-dot.connected{background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.18)}
+.hardware-dot.disconnected{background:#bcc1ba}
+
+/* Hardware bridge card on device page */
+.hardware-bridge-card{padding:20px;margin-top:16px;border:1px solid rgba(77,81,76,.13);border-radius:22px;background:rgba(255,255,255,.74);box-shadow:0 18px 48px rgba(50,52,48,.05)}
+.hardware-bridge-card.connected{border-color:rgba(34,197,94,.28)}
+.hardware-bridge-card.disconnected{border-color:rgba(77,81,76,.13)}
+.hardware-bridge-card .card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.hardware-bridge-card .card-head h2{margin:3px 0 0;font-size:18px}
+.hardware-bridge-badge{padding:4px 10px;border-radius:999px;font:800 10px ui-monospace,monospace}
+.hardware-bridge-badge.connected{background:#dceadd;color:#3d6b42}
+.hardware-bridge-badge.disconnected{background:#eceee8;color:#687068}
+.hardware-bridge-body{display:grid;gap:14px}
+.hardware-bridge-status-row{display:flex;align-items:center;gap:9px;font-size:13px;color:#5a5f58}
+.hardware-bridge-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.hardware-bridge-facts>span{display:grid;gap:3px;padding:12px;border-radius:11px;background:#f4f4ef}
+.hardware-bridge-facts b{font-size:9px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+.hardware-bridge-facts small{font-size:12px;color:var(--ink)}
+
+@media(max-width:820px){
+  .hardware-status span:last-child{display:none}
+  .hardware-bridge-facts{grid-template-columns:1fr}
+}
 

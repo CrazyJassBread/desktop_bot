@@ -1,0 +1,82 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: feature/esp32-hardware-integration
+nodes_managed: true
+exported_at: "2026-07-25T18:13:02Z"
+modules:
+    "":
+        dir_name: PrintPal 桌面陪伴生态 MVP（根项目）
+        title: PrintPal 桌面陪伴生态 MVP（根项目）
+        scope:
+            - README.md
+            - .gitignore
+            - config.yaml
+            - package.json
+            - requirements.txt
+            - requirements-dev.txt
+            - pytest.ini
+            - .env.example
+            - package-lock.json
+        source_files: []
+        children:
+            - desktop_bot
+            - docs_and_specs
+            - integrations
+            - scripts_and_tools
+            - tests
+        depends_on: []
+        related_to: []
+    desktop_bot:
+        dir_name: 桌面端感知与事件驱动机器人运行时
+        title: 桌面端感知与事件驱动机器人运行时
+        scope:
+            - app/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: integrations
+            - path: scripts_and_tools
+            - path: tests
+    docs_and_specs:
+        dir_name: 项目文档与规格说明（AI Hub OS _ MIMO）
+        title: 项目文档与规格说明（AI Hub OS / MIMO）
+        scope:
+            - docs/
+            - AI_Hardware_Community_Project/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    integrations:
+        dir_name: 桌面端事件集成桥接
+        title: 桌面端事件集成桥接
+        scope:
+            - integrations/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: desktop_bot
+    scripts_and_tools:
+        dir_name: ESP32 外设调试与硬件诊断脚本集
+        title: ESP32 外设调试与硬件诊断脚本集
+        scope:
+            - scripts/
+            - tools/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: desktop_bot
+    tests:
+        dir_name: 单元测试套件（配置、语音感知与 VAD 流处理）
+        title: 单元测试套件（配置、语音感知与 VAD 流处理）
+        scope:
+            - tests/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: desktop_bot

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,11 @@ class SileroVADBackend(VADBackend):
     FRAME_SAMPLES = 512
     CONTEXT_SAMPLES = 64
 
-    def __init__(self, model_path: Path | str = "bundled") -> None:
+    def __init__(
+        self,
+        model_path: Path | str = "bundled",
+        executor: ThreadPoolExecutor | None = None,
+    ) -> None:
         try:
             import onnxruntime
         except ImportError as exc:
@@ -41,6 +46,7 @@ class SileroVADBackend(VADBackend):
             (1, self.CONTEXT_SAMPLES),
             dtype=np.float32,
         )
+        self._executor = executor
 
     @staticmethod
     def _resolve_model_path(model_path: Path | str) -> Path:
@@ -89,6 +95,14 @@ class SileroVADBackend(VADBackend):
         samples: np.ndarray,
         sample_rate: int,
     ) -> float:
+        if self._executor is not None:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                self._executor,
+                self._probability_sync,
+                samples,
+                sample_rate,
+            )
         return await asyncio.to_thread(
             self._probability_sync,
             samples,

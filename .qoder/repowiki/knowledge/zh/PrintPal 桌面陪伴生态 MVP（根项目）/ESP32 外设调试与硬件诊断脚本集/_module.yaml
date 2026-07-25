@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: scripts_and_tools
+title: ESP32 外设调试与硬件诊断脚本集
+scope:
+    - scripts/
+    - tools/
+source_files: []
+depends_on: []
+related_to:
+    - path: desktop_bot

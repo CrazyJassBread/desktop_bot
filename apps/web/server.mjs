@@ -2,7 +2,8 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleApiRequest, startDailyBriefingScheduler } from "./api/mock-api.mjs";
+import { handleApiRequest, startDailyBriefingScheduler, setBridgeInstance as setApiBridgeInstance, updateBridgeStatus, orchestrateTranscript, handleVoiceLetterTurn } from "./api/mock-api.mjs";
+import { startDesktopBotBridge } from "./services/desktop-bot-bridge.mjs";
 
 const appRoot = fileURLToPath(new URL(".", import.meta.url));
 const port = Number.parseInt(process.env.PORT ?? "18000", 10);
@@ -120,7 +121,62 @@ server.listen(port, host, () => {
 
 const dailyBriefingScheduler = startDailyBriefingScheduler();
 
+const bridgeEnabled = process.env.DESKTOP_BOT_BRIDGE_ENABLED === "true";
+const bridgeBaseUrl = process.env.DESKTOP_BOT_BASE_URL ?? "http://127.0.0.1:8090";
+const bridgeWsPath = process.env.DESKTOP_BOT_WEBSOCKET_PATH ?? "/api/events";
+
+let desktopBotBridge = null;
+if (bridgeEnabled) {
+  desktopBotBridge = startDesktopBotBridge({
+    baseUrl: bridgeBaseUrl,
+    wsPath: bridgeWsPath,
+    enabled: bridgeEnabled,
+    onEvent: async (event) => {
+      console.log(JSON.stringify({ level: "info", source: "desktop-bot-bridge", event }));
+      try {
+        const HARDWARE_USER = "hardware-bot";
+        switch (event.type) {
+          case "speech_transcribed":
+          case "chat_ask": {
+            const transcript = event.transcript;
+            if (transcript) {
+              const decision = await orchestrateTranscript(transcript, { source: "desktop_bot" });
+              console.log(JSON.stringify({ level: "info", source: "desktop-bot-bridge", result: "orchestrated", intent: decision?.intent }));
+              if (decision?.intent === "WRITE_LETTER") {
+                await handleVoiceLetterTurn(HARDWARE_USER, transcript, decision);
+              }
+            }
+            break;
+          }
+          case "letter_compose":
+          case "letter_event": {
+            const transcript = event.transcript;
+            if (transcript) {
+              await handleVoiceLetterTurn(HARDWARE_USER, transcript);
+            }
+            break;
+          }
+          case "photo_captured": {
+            console.log(JSON.stringify({ level: "info", source: "desktop-bot-bridge", photo: event.capture_id }));
+            break;
+          }
+          default:
+            break;
+        }
+      } catch (error) {
+        console.error(JSON.stringify({ level: "error", source: "desktop-bot-bridge", error: error.message, eventType: event.type }));
+      }
+    },
+    onStatus: (status) => {
+      updateBridgeStatus(status);
+      console.log(JSON.stringify({ level: "info", source: "desktop-bot-bridge", status }));
+    }
+  });
+  setApiBridgeInstance(desktopBotBridge, desktopBotBridge.status());
+}
+
 function shutdown() {
+  desktopBotBridge?.stop();
   dailyBriefingScheduler.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5_000).unref();

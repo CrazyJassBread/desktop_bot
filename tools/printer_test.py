@@ -1,7 +1,7 @@
 import argparse
 
 
-DEFAULT_ESP_IP = "10.76.14.192"
+DEFAULT_ESP_IP = "10.76.0.126"
 DEFAULT_TEXT = "Hello from my laptop!\nSecond line.\n"
 
 

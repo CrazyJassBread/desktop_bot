@@ -7,8 +7,8 @@ from app.hardware_main import build_parser
 def test_config_defaults():
     config = load_config()
     assert config.audio.target_sample_rate == 16_000
-    assert config.hardware.audio_port == 8081
-    assert config.hardware.vision_port == 8082
+    assert config.hardware.audio_port == 8080
+    assert config.hardware.vision_port == 8081
     assert config.keywords.wake
     assert config.perception.vision_max_fps == 5
     assert config.application.photo_delay_seconds == 2
@@ -18,7 +18,7 @@ def test_config_defaults():
 
 def test_repository_config_loads():
     config = load_config("config.yaml")
-    assert config.asr.backend == "faster_whisper"
+    assert config.asr.backend == "openai_whisper"
     assert config.vision.enabled is True
 
 

@@ -35,12 +35,12 @@ class ASRConfig:
 class HardwareConfig:
     audio_enabled: bool = True
     audio_host: str = "0.0.0.0"
-    audio_port: int = 8081
+    audio_port: int = 8080
     audio_frame_samples: int = 512
     audio_queue_size: int = 256
     vision_enabled: bool = True
     vision_host: str = "0.0.0.0"
-    vision_port: int = 8082
+    vision_port: int = 8081
     vision_upload_path: str = "/upload"
     session_id: str = "bot"
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.asr.base import ASRBackend
 from app.asr.faster_whisper_backend import FasterWhisperBackend
 from app.asr.mock_backend import MockASRBackend
+from app.asr.openai_whisper_backend import OpenAIWhisperBackend
 from app.audio.vad.base import VADBackend
 from app.audio.vad.silero_backend import SileroVADBackend
 from app.config import AppConfig, ConfigurationError
@@ -27,7 +29,9 @@ def setup_logging(log_path: Path = Path("logs/perception.log")) -> None:
     )
 
 
-def build_asr(config: AppConfig) -> ASRBackend:
+def build_asr(
+    config: AppConfig, executor: ThreadPoolExecutor | None = None
+) -> ASRBackend:
     if config.asr.backend == "mock":
         return MockASRBackend(config.asr.mock_transcripts)
     if config.asr.backend == "faster_whisper":
@@ -37,24 +41,32 @@ def build_asr(config: AppConfig) -> ASRBackend:
             config.asr.device,
             config.asr.compute_type,
             config.asr.language,
+            executor=executor,
         )
+    if config.asr.backend == "openai_whisper":
+        return OpenAIWhisperBackend(config.asr.model)
     raise ConfigurationError(f"unsupported ASR backend: {config.asr.backend}")
 
 
-def build_vad(config: AppConfig) -> VADBackend:
+def build_vad(
+    config: AppConfig, executor: ThreadPoolExecutor | None = None
+) -> VADBackend:
     if config.vad.backend == "silero":
-        return SileroVADBackend(config.vad.model)
+        return SileroVADBackend(config.vad.model, executor=executor)
     raise ConfigurationError(
         f"unsupported VAD backend: {config.vad.backend}; expected silero"
     )
 
 
-def build_gesture(config: AppConfig) -> GestureBackend:
+def build_gesture(
+    config: AppConfig, executor: ThreadPoolExecutor | None = None
+) -> GestureBackend:
     if config.vision.backend == "mediapipe":
         return MediaPipeGestureBackend(
             config.vision.gesture_model,
             config.vision.score_threshold,
             config.vision.max_hands,
+            executor=executor,
         )
     raise ConfigurationError(
         "unsupported vision backend: "

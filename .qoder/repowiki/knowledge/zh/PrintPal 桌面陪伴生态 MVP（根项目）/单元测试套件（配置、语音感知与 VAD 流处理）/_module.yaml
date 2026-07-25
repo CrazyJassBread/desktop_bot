@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: tests
+title: 单元测试套件（配置、语音感知与 VAD 流处理）
+scope:
+    - tests/
+source_files: []
+depends_on: []
+related_to:
+    - path: desktop_bot

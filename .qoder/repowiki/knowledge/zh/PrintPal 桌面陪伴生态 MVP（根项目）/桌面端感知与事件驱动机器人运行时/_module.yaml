@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: desktop_bot
+title: 桌面端感知与事件驱动机器人运行时
+scope:
+    - app/
+source_files: []
+depends_on: []
+related_to:
+    - path: integrations
+    - path: scripts_and_tools
+    - path: tests

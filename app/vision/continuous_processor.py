@@ -68,7 +68,8 @@ class ContinuousVisionProcessor:
             await asyncio.sleep(delay)
         self._last_started = time.monotonic()
         try:
-            rgb = decode_jpeg(
+            rgb = await asyncio.to_thread(
+                decode_jpeg,
                 request.image_bytes,
                 request.content_type,
                 self.config,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -21,6 +22,7 @@ class FasterWhisperBackend(ASRBackend):
         device: str = "cpu",
         compute_type: str = "int8",
         language: str = "zh",
+        executor: ThreadPoolExecutor | None = None,
     ) -> None:
         self.model_name = model_name
         self.model_dir = Path(model_dir)
@@ -29,6 +31,7 @@ class FasterWhisperBackend(ASRBackend):
         self.language = language
         self._model: Any = None
         self._model_lock = Lock()
+        self._executor = executor
 
     def _get_model(self) -> Any:
         if self._model is None:
@@ -64,4 +67,9 @@ class FasterWhisperBackend(ASRBackend):
             raise ASRError("ASR inference failed") from exc
 
     async def transcribe(self, audio: AudioData) -> str:
+        if self._executor is not None:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                self._executor, self._transcribe_sync, audio
+            )
         return await asyncio.to_thread(self._transcribe_sync, audio)

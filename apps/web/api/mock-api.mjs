@@ -18,6 +18,24 @@ import {
   renderThermalImageBatches
 } from "../services/thermal-image.mjs";
 
+export { orchestrateTranscript };
+
+// --- Bridge integration -----------------------------------------------------
+// Module-level handles set by server.mjs so that handleApiRequest can expose
+// bridge status and accept externally-pushed perception events without a
+// signature change.
+let _bridgeInstance = null;
+let _bridgeStatus = null;
+
+export function setBridgeInstance(instance, status) {
+  _bridgeInstance = instance;
+  _bridgeStatus = status;
+}
+
+export function updateBridgeStatus(status) {
+  _bridgeStatus = status;
+}
+
 const me = {
   id: "usr-lin",
   email: "hello@aihub.local",
@@ -833,10 +851,12 @@ function deviceForUser(userId) {
 let printerProbe = { checkedAt: 0, online: false };
 async function printerOnline() {
   if (process.env.NODE_ENV === "test") return true;
-  if (Date.now() - printerProbe.checkedAt < 5_000) return printerProbe.online;
+  // ESP32 HTTP server response times are unstable and can occasionally exceed 1.5s.
+  // Use a longer timeout (4s) and cache the result for 15s to avoid false OFFLINE reports.
+  if (Date.now() - printerProbe.checkedAt < 15_000) return printerProbe.online;
   try {
-    await fetch(printerBaseUrl(), { method: "GET", signal: AbortSignal.timeout(1_500) });
-    printerProbe = { checkedAt: Date.now(), online: true };
+    const response = await fetch(printerBaseUrl(), { method: "GET", signal: AbortSignal.timeout(4_000) });
+    printerProbe = { checkedAt: Date.now(), online: response.ok };
   } catch {
     printerProbe = { checkedAt: Date.now(), online: false };
   }
@@ -1050,7 +1070,7 @@ async function sendVoiceLetterSession(session, viewerId) {
   return session.sentResult;
 }
 
-async function handleVoiceLetterTurn(viewerId, transcript, initialDecision = null) {
+export async function handleVoiceLetterTurn(viewerId, transcript, initialDecision = null) {
   let session = activeVoiceLetterSession(viewerId);
   const text = String(transcript ?? "").trim();
   if (!session && initialDecision?.intent === "WRITE_LETTER") {
@@ -1646,6 +1666,90 @@ export async function handleApiRequest(request, response, requestId) {
   try {
     if (await handleAuthRoute({ request, response, requestId, method, path })) return true;
 
+    // --- Hardware bridge endpoints (service-to-service, no cookie auth) ---
+
+    if (method === "GET" && path === "/hardware/bridge/status") {
+      const liveStatus = _bridgeInstance?.status?.() || _bridgeStatus || { connected: false, enabled: false };
+      send(response, 200, {
+        bridge: liveStatus,
+        requestId
+      }, requestId);
+      return true;
+    }
+
+    if (method === "POST" && path === "/perception/events") {
+      try {
+        const event = await readJson(request);
+        if (!event || typeof event !== "object" || Array.isArray(event)) {
+          const issue = problem(422, "EVENT_INVALID", "Event must be a JSON object", "Request body must be a JSON object.", requestId);
+          send(response, issue.status, issue.body, requestId);
+          return true;
+        }
+        if (_bridgeInstance?.handleExternalEvent) {
+          _bridgeInstance.handleExternalEvent(event);
+          send(response, 200, { status: "accepted", requestId }, requestId);
+        } else {
+          send(response, 202, { status: "bridge_disabled", requestId }, requestId);
+        }
+      } catch (error) {
+        const issue = problem(400, "EVENT_INVALID", "Event payload invalid", error.message, requestId);
+        send(response, issue.status, issue.body, requestId);
+      }
+      return true;
+    }
+
+    if (method === "POST" && path === "/photos/hardware") {
+      try {
+        const form = await readMultipart(request);
+        const file = form.get("image");
+        if (!file || typeof file.arrayBuffer !== "function") {
+          const issue = problem(422, "PHOTO_IMAGE_REQUIRED", "Photo image is required", "Upload an image file using multipart field `image`.", requestId);
+          send(response, issue.status, issue.body, requestId);
+          return true;
+        }
+        const contentType = String(file.type || "image/jpeg").toLowerCase();
+        if (!["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(contentType)) {
+          const issue = problem(415, "PHOTO_TYPE_UNSUPPORTED", "Photo type is unsupported", "Use JPG, PNG or WebP for thermal processing.", requestId);
+          send(response, issue.status, issue.body, requestId);
+          return true;
+        }
+        const bytes = Buffer.from(await file.arrayBuffer());
+        if (!bytes.length || bytes.length > 4_194_304) {
+          const issue = problem(413, "PHOTO_TOO_LARGE", "Photo is too large", "The MVP accepts one photo up to 4 MiB.", requestId);
+          send(response, issue.status, issue.body, requestId);
+          return true;
+        }
+        const hardwareUserId = "hardware-bot";
+        const purpose = String(form.get("purpose") ?? "memory").slice(0, 24);
+        const profile = purpose === "letter" ? "letter" : purpose === "print" ? "print" : "album";
+        const processed = await processThermalImage(bytes, {
+          profile,
+          pixelSize: form.get("pixelSize"),
+          grayscaleLevels: form.get("grayscaleLevels"),
+          contrast: form.get("contrast"),
+          brightness: form.get("brightness"),
+          cannyLow: form.get("cannyLow"),
+          cannyHigh: form.get("cannyHigh")
+        });
+        const photo = {
+          id: `photo-${crypto.randomUUID()}`,
+          userId: hardwareUserId,
+          title: String(form.get("title") ?? file.name ?? "设备拍摄照片").trim().slice(0, 80),
+          source: "hardware",
+          purpose,
+          createdAt: new Date().toISOString(),
+          originalName: String(file.name ?? "photo").slice(0, 120),
+          processed
+        };
+        photoAssets.unshift(photo);
+        send(response, 201, { photo, requestId }, requestId);
+      } catch (error) {
+        const issue = problem(400, "PHOTO_PROCESS_FAILED", "Photo could not be processed", error.message, requestId);
+        send(response, issue.status, issue.body, requestId);
+      }
+      return true;
+    }
+
     const auth = authenticateRequest(request, response);
     if (!auth) {
       const issue = problem(401, "AUTHENTICATION_REQUIRED", "Authentication required", "登录状态已过期，请重新登录。", requestId);
@@ -1931,8 +2035,8 @@ export async function handleApiRequest(request, response, requestId) {
         model: config.model,
         keyExposed: false,
         capabilities: ["chat", "intent", "plan", "letter-polish", "summary"],
-        imageProcessor: "local-pixel-canny",
-        imageCapabilities: ["upload", "camera", "pixelation", "grayscale-quantization", "canny-outline", "thermal-print"],
+        imageProcessor: "local-photo-dither-v2",
+        imageCapabilities: ["upload", "camera", "auto-levels", "grayscale-quantization", "serpentine-dither", "thermal-print"],
         requestId
       }, requestId);
       return true;
@@ -2308,7 +2412,7 @@ export async function handleApiRequest(request, response, requestId) {
       return true;
     }
 
-    if (method === "POST" && (path === "/photos" || path === "/photos/hardware")) {
+    if (method === "POST" && path === "/photos") {
       try {
         const form = await readMultipart(request);
         const file = form.get("image");
@@ -2329,7 +2433,7 @@ export async function handleApiRequest(request, response, requestId) {
           send(response, issue.status, issue.body, requestId);
           return true;
         }
-        const source = path === "/photos/hardware" ? "hardware" : String(form.get("source") ?? "upload").slice(0, 24);
+        const source = String(form.get("source") ?? "upload").slice(0, 24);
         const purpose = String(form.get("purpose") ?? "memory").slice(0, 24);
         const profile = purpose === "letter" ? "letter" : purpose === "print" ? "print" : "album";
         const processed = await processThermalImage(bytes, {
