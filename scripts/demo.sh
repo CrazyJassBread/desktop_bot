@@ -11,7 +11,7 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-(cd "$ROOT" && python -m app "$@") &
+(cd "$ROOT" && python -m app mictest "$@") &
 (cd "$ROOT/ui" && node --env-file-if-exists=.env.local server.mjs) &
 
 wait

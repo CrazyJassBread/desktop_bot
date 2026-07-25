@@ -222,6 +222,9 @@ class PrinterConfig:
     dither: bool = True
     rotate_180: bool = False
     max_chunk_height: int = 1200
+    print_answers: bool = False
+    font_path: str = "/System/Library/Fonts/Hiragino Sans GB.ttc"
+    letter_batch_height: int = 900
 
 
 @dataclass
@@ -489,6 +492,13 @@ def _validate(config: AppConfig) -> None:
     if not 2 <= config.printer.grayscale_levels <= 256:
         raise ConfigurationError(
             "printer.grayscale_levels must be between 2 and 256"
+        )
+    _positive_int(
+        config.printer.letter_batch_height, "printer.letter_batch_height"
+    )
+    if config.printer.print_answers and not config.printer.enabled:
+        raise ConfigurationError(
+            "printer.print_answers requires printer.enabled=true"
         )
     if config.printer.enabled:
         if not isinstance(config.printer.base_url, str) or not (

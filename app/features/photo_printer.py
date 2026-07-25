@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
+import requests
 from PIL import Image, ImageEnhance, ImageOps
 
 from app.config import PrinterConfig
@@ -163,29 +161,30 @@ class ThermalPrinterClient:
         }
 
     def _post_chunk(self, chunk: Image.Image) -> object:
-        query = urlencode({"width": chunk.width, "height": chunk.height})
-        url = f"{self.config.base_url.rstrip('/')}/printer/image?{query}"
-        request = Request(
-            url,
-            data=pack_bitmap(chunk),
-            method="POST",
+        return self.post_bitmap(pack_bitmap(chunk), chunk.width, chunk.height)
+
+    def post_bitmap(self, packed: bytes, width: int, height: int) -> object:
+        """Upload a pre-packed 1-bit bitmap. Blocking; run via to_thread."""
+        # Same call shape as the reference notebook in tests/printer:
+        # POST /printer/image with width/height params and the packed
+        # bitmap as an octet-stream body.
+        response = requests.post(
+            f"{self.config.base_url.rstrip('/')}/printer/image",
+            params={"width": width, "height": height},
+            data=packed,
             headers={"Content-Type": "application/octet-stream"},
-        )
-        with urlopen(
-            request,
             timeout=self.config.timeout_seconds,
-        ) as response:
-            body = response.read()
-            status = response.status
-        if not body:
-            return {"status": status}
+        )
+        response.raise_for_status()
+        if not response.content:
+            return {"status": response.status_code}
         try:
-            parsed = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            parsed = response.json()
+        except ValueError:
             return {
-                "status": status,
-                "response": body.decode("utf-8", errors="replace"),
+                "status": response.status_code,
+                "response": response.text,
             }
         if isinstance(parsed, dict):
-            return {"status": status, **parsed}
-        return {"status": status, "response": parsed}
+            return {"status": response.status_code, **parsed}
+        return {"status": response.status_code, "response": parsed}

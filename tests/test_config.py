@@ -147,8 +147,31 @@ def test_config_printer_defaults_to_disabled():
     assert config.printer.pixel_size == 4
     assert config.printer.grayscale_levels == 4
     assert config.printer.max_chunk_height == 1200
+    assert config.printer.print_answers is False
+    assert config.printer.letter_batch_height == 900
+    assert config.printer.font_path
     assert config.keywords.take_photo
     assert config.application.voice_photo_delay_seconds == 1.0
+
+
+def test_config_print_answers_requires_printer_enabled(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "printer:\n  enabled: false\n  print_answers: true\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError):
+        load_config(path)
+
+
+def test_config_printer_rejects_non_positive_letter_batch_height(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "printer:\n  letter_batch_height: 0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError):
+        load_config(path)
 
 
 def test_repository_printer_config_loads():

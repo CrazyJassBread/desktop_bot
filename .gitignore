@@ -25,3 +25,4 @@ records/
 received_images/
 microphone.wav
 
+config/llm.yaml

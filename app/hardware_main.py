@@ -229,6 +229,7 @@ async def run(args: argparse.Namespace) -> None:
     api_server = None
     recorder = None
     outbox = None
+    answer_printer = None
     try:
         if args.mode == "mictest":
             from app.features.result_recorder import ResultRecorder
@@ -252,6 +253,30 @@ async def run(args: argparse.Namespace) -> None:
             outbox.set_event_emitter(daemon.emit)
             outbox.start()
             LOGGER.info("letter outbox delivering to %s", config.ui.base_url)
+        if config.printer.enabled and config.printer.print_answers:
+            from app.features.answer_printer import AnswerPrinter
+
+            answer_printer = AnswerPrinter(
+                daemon.event_bus,
+                printer=ThermalPrinterClient(config.printer),
+                ui_base_url=(
+                    config.ui.base_url if config.ui.enabled else None
+                ),
+                device_token=(
+                    config.ui.device_token if config.ui.enabled else None
+                ),
+                rotate_180=config.printer.rotate_180,
+                letter_batch_height=config.printer.letter_batch_height,
+                max_chunk_height=config.printer.max_chunk_height,
+                font_path=config.printer.font_path,
+                timeout_seconds=config.ui.timeout_seconds,
+            )
+            answer_printer.set_event_emitter(daemon.emit)
+            answer_printer.start()
+            LOGGER.info(
+                "answer printer active (ui renderer %s)",
+                "on" if config.ui.enabled else "off",
+            )
         if config.api.enabled:
             from app.api.server import EventAPIServer
 
@@ -276,6 +301,8 @@ async def run(args: argparse.Namespace) -> None:
         )
         await daemon.run()
     finally:
+        if answer_printer is not None:
+            await answer_printer.aclose()
         if outbox is not None:
             await outbox.aclose()
         if recorder is not None:

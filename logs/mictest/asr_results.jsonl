@@ -22,3 +22,30 @@
 {"time": "2026-07-25T21:11:44.568", "event_type": "speech.transcribed", "transcript": "Oh, yeah, it's okay. Then what about English? Can you speak Chinese or switch to Chinese? I want to take a photo of it.", "audio_duration_seconds": 16.704, "matched_event": "mode.switch_chinese"}
 {"time": "2026-07-25T21:11:52.556", "event_type": "speech.transcribed", "transcript": "噢有的有的Rather later, start later, finish later", "audio_duration_seconds": 6.88, "matched_event": null}
 {"time": "2026-07-25T22:20:49.824", "event_type": "speech.transcribed", "transcript": "7号人身房里店家什么类型尤其这个人带进去会在哪里我觉得很像我觉得你能够选到一个一个人行不行我说的我们上的就是大陆的大陆的一个人大陆爆炸大陆的一个人然后他们有两个小伙伴现在招牌都在你应该是在华丽西滨北大陆的一个人小伙伴百分百的我在家里他说行了吧乐器你跟我们一起去海庭对好好好", "audio_duration_seconds": 60.0, "matched_event": null}
+{"time": "2026-07-25T23:21:45.141", "event_type": "speech.transcribed", "transcript": "威威", "audio_duration_seconds": 1.344, "matched_event": null}
+{"time": "2026-07-25T23:21:53.253", "event_type": "speech.transcribed", "transcript": "现在是单纯的那个他问哪有一个进入", "audio_duration_seconds": 7.776, "matched_event": null}
+{"time": "2026-07-25T23:21:58.078", "event_type": "speech.transcribed", "transcript": "问答的一个关键是我有一个问题", "audio_duration_seconds": 4.992, "matched_event": "feature.start_qa"}
+{"time": "2026-07-25T23:22:07.244", "event_type": "speech.transcribed", "transcript": "哦 问答开始了我的问题是请帮我介绍一下强大学期的基本概念", "audio_duration_seconds": 8.288, "matched_event": null}
+{"time": "2026-07-25T23:22:18.182", "event_type": "speech.transcribed", "transcript": "然后请用一个通俗运动的方式也可以结合费卖设计法来转述", "audio_duration_seconds": 5.92, "matched_event": null}
+{"time": "2026-07-25T23:22:28.764", "event_type": "speech.transcribed", "transcript": "它这个水是内容是关于强化学习的", "audio_duration_seconds": 9.888, "matched_event": null}
+{"time": "2026-07-25T23:22:35.987", "event_type": "speech.transcribed", "transcript": "我的问题结束问完了", "audio_duration_seconds": 3.168, "matched_event": "feature.end_qa"}
+{"time": "2026-07-25T23:22:48.598", "event_type": "speech.transcribed", "transcript": "呃...If you are kidding me, you are a pig", "audio_duration_seconds": 3.296, "matched_event": null}
+{"time": "2026-07-25T23:22:49.943", "event_type": "speech.transcribed", "transcript": "他识别到了", "audio_duration_seconds": 2.144, "matched_event": null}
+{"time": "2026-07-25T23:22:51.042", "event_type": "speech.transcribed", "transcript": "然後", "audio_duration_seconds": 2.176, "matched_event": null}
+{"time": "2026-07-25T23:22:56.362", "event_type": "speech.transcribed", "transcript": "就是现在唯一要做的就是只要他的观念词是能终究识别的就行", "audio_duration_seconds": 4.992, "matched_event": null}
+{"time": "2026-07-25T23:23:09.419", "event_type": "speech.transcribed", "transcript": "如果关键词识别到了就没问题因为后世的那个错别字是可以让那个语言模型自己去更正的", "audio_duration_seconds": 8.576, "matched_event": null}
+{"time": "2026-07-25T23:23:15.545", "event_type": "speech.transcribed", "transcript": "现在唯一担心的确实就是那要么我们把谢谢加进去", "audio_duration_seconds": 5.12, "matched_event": null}
+{"time": "2026-07-25T23:23:20.854", "event_type": "speech.transcribed", "transcript": "嘘你哭了", "audio_duration_seconds": 1.952, "matched_event": null}
+{"time": "2026-07-25T23:25:38.553", "event_type": "speech.transcribed", "transcript": "呃 请回答我的一个问题", "audio_duration_seconds": 3.616, "matched_event": null}
+{"time": "2026-07-25T23:25:49.270", "event_type": "speech.transcribed", "transcript": "哦没有没有皮皮套这个关键是我有一个问题", "audio_duration_seconds": 10.24, "matched_event": "feature.start_qa"}
+{"time": "2026-07-25T23:25:59.672", "event_type": "speech.transcribed", "transcript": "请帮我介绍一下强化学习的基本概念", "audio_duration_seconds": 8.064, "matched_event": null}
+{"time": "2026-07-25T23:26:07.180", "event_type": "speech.transcribed", "transcript": "呃 内容在400字左右即可", "audio_duration_seconds": 4.608, "matched_event": null}
+{"time": "2026-07-25T23:26:14.451", "event_type": "speech.transcribed", "transcript": "要不你跟他联系的说就不等他联系了结束问的哦 也可以", "audio_duration_seconds": 6.08, "matched_event": null}
+{"time": "2026-07-25T23:26:21.666", "event_type": "speech.transcribed", "transcript": "现在试一下这个问答系统是不是可以结束回答", "audio_duration_seconds": 6.496, "matched_event": null}
+{"time": "2026-07-25T23:26:25.734", "event_type": "speech.transcribed", "transcript": "字幕by索兰娅", "audio_duration_seconds": 1.568, "matched_event": null}
+{"time": "2026-07-25T23:27:07.999", "event_type": "speech.transcribed", "transcript": "问完了卡住了吗他在处理", "audio_duration_seconds": 39.936, "matched_event": "feature.end_qa"}
+{"time": "2026-07-25T23:27:12.706", "event_type": "speech.transcribed", "transcript": "这么慢这为什么", "audio_duration_seconds": 5.312, "matched_event": null}
+{"time": "2026-07-25T23:27:30.196", "event_type": "speech.transcribed", "transcript": "那就处理的时候给它这个表情做一个另外的表情等一下我看一下", "audio_duration_seconds": 17.056, "matched_event": null}
+{"time": "2026-07-25T23:27:32.866", "event_type": "speech.transcribed", "transcript": "字幕by索兰娅", "audio_duration_seconds": 1.088, "matched_event": null}
+{"time": "2026-07-25T23:27:53.774", "event_type": "speech.transcribed", "transcript": "哦好的 可以但是我不知道這是什麼他為什麼會", "audio_duration_seconds": 17.632, "matched_event": null}
+{"time": "2026-07-25T23:28:04.736", "event_type": "speech.transcribed", "transcript": "Do you see that it's closed?看看Logali的这个测试之路", "audio_duration_seconds": 9.6, "matched_event": null}

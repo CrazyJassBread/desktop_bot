@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { db, hashPassword, publicUser, tokenHash, verifyPassword } from "./database.mjs";
 import { backendUrl, config } from "../config.mjs";
 import { deepSeekChat, deepSeekConfig } from "../services/deepseek-client.mjs";
-import { buildThermalLetterSvg } from "../services/thermal-letter.mjs";
+import { buildThermalLetterSvg, renderThermalLetterBatches } from "../services/thermal-letter.mjs";
 
 const SESSION_COOKIE = "aihub_session";
 const shortSessionMs = 24 * 60 * 60 * 1000;
@@ -208,6 +208,33 @@ export async function handleApiRequest(request, response, requestId) {
         db.exec("COMMIT");
       } catch (error) { db.exec("ROLLBACK"); throw error; }
       return json(response, 201, { letterId, status: "queued", matchedRecipient: recipient.display_name });
+    }
+
+    if (method === "POST" && path === "/device/letters/render") {
+      if (!config.device.apiToken) return problem(response, 503, "DEVICE_DISABLED", "Device letter intake is not configured.", requestId);
+      const auth = String(request.headers.authorization || "");
+      if (auth !== `Bearer ${config.device.apiToken}`) return problem(response, 401, "INVALID_DEVICE_TOKEN", "Device token is missing or incorrect.", requestId);
+      const body = await readJson(request);
+      const content = String(body.body || "").trim().slice(0, 3000);
+      if (!content) return problem(response, 400, "INVALID_RENDER_INPUT", "Render body text is required.", requestId);
+      const rendered = await renderThermalLetterBatches(
+        {
+          subject: String(body.subject || "").trim().slice(0, 120) || undefined,
+          body: content,
+          recipient: String(body.recipient || "").trim().slice(0, 48) || undefined,
+          sender: String(body.sender || "").trim().slice(0, 48) || undefined
+        },
+        {
+          rotate180: body.rotate180 === undefined ? true : body.rotate180 === true,
+          maxBatchHeight: Number(body.maxBatchHeight) || undefined
+        }
+      );
+      return json(response, 200, {
+        width: rendered.width,
+        pageCount: rendered.pageCount,
+        rotate180: rendered.rotate180,
+        batches: rendered.batches.map((batch) => ({ index: batch.index, width: batch.width, height: batch.height, bitmapBase64: batch.bitmap.toString("base64") }))
+      });
     }
 
     const user = requireUser(request, response, requestId);

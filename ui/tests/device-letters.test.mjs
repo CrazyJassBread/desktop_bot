@@ -124,3 +124,43 @@ test("drafts can be assigned a recipient and then sent", async () => {
     assert.ok(jobs.items.some((job) => job.letterId === created.letterId));
   });
 });
+
+test("device render endpoint requires a valid token and a body", async () => {
+  await withApi(async (base) => {
+    const missing = await fetch(`${base}/device/letters/render`, deviceJson({ body: "hi" }, ""));
+    assert.equal(missing.status, 401);
+    const wrong = await fetch(`${base}/device/letters/render`, deviceJson({ body: "hi" }, "not-the-token"));
+    assert.equal(wrong.status, 401);
+    const empty = await fetch(`${base}/device/letters/render`, deviceJson({ subject: "问题" }));
+    assert.equal(empty.status, 400);
+  });
+});
+
+test("device render endpoint returns template bitmap batches without persisting", async () => {
+  await withApi(async (base) => {
+    const response = await fetch(`${base}/device/letters/render`, deviceJson({
+      subject: "今天天气怎么样？",
+      body: "今天晴朗，适合出门散步。\n记得带水。",
+      rotate180: false,
+      maxBatchHeight: 900
+    }));
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.width, 384);
+    assert.equal(result.rotate180, false);
+    assert.ok(result.pageCount >= 1);
+    assert.equal(result.batches.length, result.pageCount);
+    for (const [index, batch] of result.batches.entries()) {
+      assert.equal(batch.index, index);
+      assert.equal(batch.width, 384);
+      assert.ok(batch.height > 0);
+      // 1-bit row-major bitmap: 48 bytes per 384px row.
+      assert.equal(Buffer.from(batch.bitmapBase64, "base64").length, (batch.width / 8) * batch.height);
+    }
+
+    // Stateless: no letter row is created by rendering.
+    const senderCookie = await login(base, "hello@aihub.local", "Demo1234");
+    const letters = await (await fetch(`${base}/letters`, authJson(senderCookie))).json();
+    assert.ok(!letters.items.some((item) => item.subject === "今天天气怎么样？"));
+  });
+});

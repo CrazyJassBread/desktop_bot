@@ -5,7 +5,7 @@
 printer:
   enabled: false
   # Base URL of the ESP32 printer HTTP server, e.g. http://10.76.10.141
-  base_url: "http://10.76.10.141"
+  base_url: "http://10.76.14.192"
   timeout_seconds: 30.0
   # Pixel-art processing applied before printing.
   pixel_size: 4
@@ -16,3 +16,11 @@ printer:
   rotate_180: false
   # Images taller than this are split into chunks before upload.
   max_chunk_height: 1200
+  # Print LLM Q&A answers on letter stationery. Uses the ui letter
+  # template when the ui server is reachable, otherwise falls back to
+  # a simplified local rendering.
+  print_answers: false
+  # Font used by the local fallback rendering (needs CJK glyphs).
+  font_path: "/System/Library/Fonts/Hiragino Sans GB.ttc"
+  # maxBatchHeight passed to the ui renderer (clamped to 360-960).
+  letter_batch_height: 900

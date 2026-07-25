@@ -6,3 +6,4 @@ mediapipe>=0.10,<0.11
 opencv-python>=4.10,<6
 Pillow>=10,<12
 aiohttp>=3.10,<4
+requests>=2.31,<3
