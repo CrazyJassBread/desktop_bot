@@ -10,17 +10,17 @@ asr:
   language: zh
 
 # Bot protocols:
-# - TCP 8081: PCM s16le, 16 kHz, mono
-# - HTTP 8082: POST /upload with a 640x480 JPEG body
+# - TCP 8080: PCM s16le, 16 kHz, mono
+# - HTTP 8081: POST /upload with a 640x480 JPEG body
 hardware:
   audio_enabled: true
   audio_host: 0.0.0.0
-  audio_port: 8081
+  audio_port: 8080
   audio_frame_samples: 512
   audio_queue_size: 256
   vision_enabled: true
   vision_host: 0.0.0.0
-  vision_port: 8082
+  vision_port: 8081
   vision_upload_path: /upload
   session_id: bot
 
@@ -35,24 +35,8 @@ vad:
   pre_roll_ms: 200
   max_utterance_seconds: 60
 
-# Keywords create explicit intents. In chat mode, unmatched ASR text is routed
-# to the chat feature as a question.
+# Optional spoken shortcut. Letter and Q&A phrases live under llm.modes.
 keywords:
-  wake:
-    - 小A
-    - 小爱
-    - 小诶
-  enter_chat:
-    - 进入聊天模式
-    - 开始聊天
-    - 智能问答
-  exit_chat:
-    - 退出聊天模式
-    - 结束聊天
-    - 返回普通模式
-  write_letter:
-    - 帮我写信
-    - 我要写一封信
   photo_print:
     - 拍照
     - 照相
@@ -84,7 +68,6 @@ vision:
   gesture_required_hits: 2
 
 application:
-  default_language: zh
   photo_enabled: true
   photo_delay_seconds: 1.0
   photo_frame_max_age_seconds: 1.0
@@ -95,7 +78,7 @@ application:
 
 printer:
   enabled: true
-  base_url: http://10.76.11.223
+  base_url: http://10.76.13.84
   width: 384
   max_chunk_height: 1200
   pixel_size: 6
@@ -112,7 +95,7 @@ printer:
 # Two-second actions: blink, laugh, confused.
 bot_expression:
   enabled: true
-  base_url: http://10.76.11.223
+  base_url: http://10.76.13.84
   endpoint: /oled/expression
   timeout_seconds: 5
   action_duration_seconds: 2
@@ -123,7 +106,6 @@ web_letter_sync:
   enabled: true
   base_url: http://127.0.0.1:18000
   endpoint: /api/v1/app/voice-letters
-  sender_email_env: AI_HUB_SENDER_EMAIL
   bridge_token_env: AI_HUB_BRIDGE_TOKEN
   timeout_seconds: 10
 
@@ -189,6 +171,8 @@ llm:
       finish_phrases:
         - 小A，请回答
         - 小A，问题说完了
+        - 请回答
+        - 问题说完了
       cancel_phrases:
         - 小A，取消问答
         - 小A，不要回答了

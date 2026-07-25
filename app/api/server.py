@@ -28,6 +28,7 @@ class EventAPIServer:
         emit: Callable[[PerceptionEvent], Awaitable[None]],
         photo_output_dir: Path,
         letter_output_dir: Path,
+        gateway_hub: object | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -39,6 +40,7 @@ class EventAPIServer:
         self.emit = emit
         self.photo_output_dir = photo_output_dir
         self.letter_output_dir = letter_output_dir
+        self.gateway_hub = gateway_hub
         self._runner = None
 
     async def start(self) -> None:
@@ -56,6 +58,11 @@ class EventAPIServer:
         app.router.add_get(self.websocket_path, self._events)
         app.router.add_get("/api/photos/{capture_id}.jpg", self._photo)
         app.router.add_get("/api/letters/{capture_id}.png", self._letter)
+        if self.gateway_hub is not None:
+            app.router.add_get(
+                "/api/gateway",
+                getattr(self.gateway_hub, "websocket_handler"),
+            )
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)

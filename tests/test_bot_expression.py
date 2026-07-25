@@ -48,7 +48,7 @@ async def test_short_action_restores_current_persistent_expression():
         sender=sender,
     )
 
-    await controller.handle(event("wake"))
+    await controller.handle(event("gesture.victory"))
     await asyncio.sleep(0.02)
     await controller.wait_idle()
 
@@ -81,7 +81,7 @@ async def test_new_persistent_state_cancels_pending_action_restore():
         sender=sender,
     )
 
-    await controller.handle(event("wake"))
+    await controller.handle(event("gesture.victory"))
     await controller.handle(event("llm.generation_started"))
     await asyncio.sleep(0.04)
     await controller.wait_idle()

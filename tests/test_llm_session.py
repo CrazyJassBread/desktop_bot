@@ -45,6 +45,7 @@ def start_event(
     event_type: str,
     *,
     recipient: str = "",
+    owner: dict[str, str] | None = None,
 ) -> PerceptionEvent:
     return PerceptionEvent(
         event_type,
@@ -52,6 +53,7 @@ def start_event(
         payload={
             "payload_text": recipient,
             "transcript": "开始命令",
+            **(owner or {}),
         },
     )
 
@@ -99,6 +101,16 @@ def test_mode_detector_recognizes_letter_qa_and_recipient_template():
     assert qa is not None
     assert qa.event_type == "llm.qa.start"
     assert detector.detect("今天不写信") is None
+
+
+def test_mode_detector_keeps_question_after_qa_start_phrase():
+    detector = LLMModeDetector(load_config().llm.modes)
+
+    match = detector.detect("进入问答模式，什么是强化学习")
+
+    assert match is not None
+    assert match.event_type == "llm.qa.start"
+    assert match.payload_text == "什么是强化学习"
 
 
 def test_mode_detector_uses_configured_order_for_templates():
@@ -157,6 +169,70 @@ async def test_letter_session_buffers_then_generates_polished_text():
     assert len(client.calls) == 1
     assert "不要虚构" in client.calls[0].system_prompt
     assert "嗯那个今天很好" in client.calls[0].user_prompt
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_letter_session_locks_owner_from_start_until_completion():
+    manager = LLMSessionManager(
+        manager_config(),
+        RecordingLLMClient("归属明确的正文"),
+        logger=logging.getLogger("test.llm.owner"),
+    )
+    owner = {
+        "owner_user_id": "user-one",
+        "owner_email": "one@example.test",
+        "owner_display_name": "用户一",
+    }
+
+    await manager.handle(
+        start_event("llm.letter.start", recipient="小明", owner=owner)
+    )
+    await manager.handle(transcript("正文内容"))
+    completed = await manager.handle(transcript("小A，信写完了"))
+
+    assert completed[0].payload["owner_user_id"] == "user-one"
+    assert completed[0].payload["owner_email"] == "one@example.test"
+    assert completed[0].payload["owner_display_name"] == "用户一"
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_qa_session_buffers_question_from_start_utterance():
+    client = RecordingLLMClient("强化学习答案")
+    manager = LLMSessionManager(
+        manager_config(),
+        client,
+        logger=logging.getLogger("test.llm.qa.initial"),
+    )
+
+    started = await manager.handle(
+        start_event("llm.qa.start", recipient="什么是强化学习")
+    )
+    completed = await manager.handle(transcript("小A，请回答"))
+
+    assert event_types(started) == ["llm.session_started"]
+    assert event_types(completed) == ["llm.answer_completed"]
+    assert "什么是强化学习" in client.calls[0].user_prompt
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_qa_finish_tolerates_asr_prefix_before_short_command():
+    client = RecordingLLMClient("人工智能答案")
+    manager = LLMSessionManager(
+        manager_config(),
+        client,
+        logger=logging.getLogger("test.llm.qa.asr_prefix"),
+    )
+
+    await manager.handle(
+        start_event("llm.qa.start", recipient="什么是人工智能")
+    )
+    completed = await manager.handle(transcript("小微衣，请回答。"))
+
+    assert event_types(completed) == ["llm.answer_completed"]
+    assert len(client.calls) == 1
     await manager.aclose()
 
 

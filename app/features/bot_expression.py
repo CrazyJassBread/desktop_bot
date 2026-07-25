@@ -59,8 +59,6 @@ class BotExpressionController:
     """Maintain a persistent mood and overlay two-second actions."""
 
     _PERSISTENT_BY_EVENT: Final[dict[str, str]] = {
-        "wake": "happy",
-        "mode.enter_chat": "happy",
         "gesture.victory": "happy",
         "feature.photo_print": "happy",
         "runtime.asr_started": "tired",
@@ -71,7 +69,6 @@ class BotExpressionController:
         "llm.generation_started": "tired",
         "photo.captured": "tired",
         "letter.rendered": "tired",
-        "mode.exit_chat": "default",
         "llm.session_cancelled": "default",
         "llm.answer_completed": "default",
         "llm.letter_completed": "tired",
@@ -86,11 +83,8 @@ class BotExpressionController:
         "letter.print_failed": "angry",
     }
     _ACTION_BY_EVENT: Final[dict[str, str]] = {
-        "wake": "blink",
-        "mode.enter_chat": "blink",
         "gesture.victory": "blink",
         "feature.photo_print": "blink",
-        "language.changed": "blink",
         "llm.answer_completed": "laugh",
         "photo.completed": "laugh",
         "letter.printed": "laugh",

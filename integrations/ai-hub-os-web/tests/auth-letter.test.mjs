@@ -115,7 +115,7 @@ test("one App voice letter appears in both users' letter spaces", async () => {
       {
         method: "POST",
         body: {
-          senderEmail: "lin@example.test",
+          senderUserId: sender.body.user.id,
           recipient: "小明",
           content: "你好"
         }
@@ -124,7 +124,7 @@ test("one App voice letter appears in both users' letter spaces", async () => {
     assert.equal(unauthorized.response.status, 401);
 
     const payload = {
-      senderEmail: "lin@example.test",
+      senderUserId: sender.body.user.id,
       recipient: "小明",
       subject: "来自杭州的信",
       content: "谢谢你一直以来的陪伴。",
@@ -181,7 +181,11 @@ test("voice sync rejects unregistered or ambiguous recipients", async () => {
   const directory = await mkdtemp(join(tmpdir(), "letter-space-"));
   const application = await listen(join(directory, "letters.sqlite"));
   try {
-    await register(application.baseUrl, "林安", "lin@example.test");
+    const sender = await register(
+      application.baseUrl,
+      "林安",
+      "lin@example.test"
+    );
     await register(application.baseUrl, "小明", "ming-one@example.test");
     await register(application.baseUrl, "小明", "ming-two@example.test");
     const headers = { Authorization: `Bearer ${bridgeToken}` };
@@ -193,7 +197,7 @@ test("voice sync rejects unregistered or ambiguous recipients", async () => {
         method: "POST",
         headers,
         body: {
-          senderEmail: "lin@example.test",
+          senderUserId: sender.body.user.id,
           recipient: "不存在",
           content: "你好"
         }
@@ -208,7 +212,7 @@ test("voice sync rejects unregistered or ambiguous recipients", async () => {
         method: "POST",
         headers,
         body: {
-          senderEmail: "lin@example.test",
+          senderUserId: sender.body.user.id,
           recipient: "小明",
           content: "你好"
         }
@@ -223,13 +227,255 @@ test("voice sync rejects unregistered or ambiguous recipients", async () => {
         method: "POST",
         headers,
         body: {
-          senderEmail: "lin@example.test",
+          senderUserId: sender.body.user.id,
           recipient: "ming-one@example.test",
           content: "你好"
         }
       }
     );
     assert.equal(exactEmail.response.status, 201);
+  } finally {
+    await application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("logged-in user can bind an online computer and logout unbinds it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "letter-space-"));
+  const application = await listen(join(directory, "letters.sqlite"));
+  try {
+    const registered = await register(
+      application.baseUrl,
+      "林安",
+      "lin@example.test"
+    );
+    const bridgeHeaders = { Authorization: `Bearer ${bridgeToken}` };
+
+    const presence = await request(
+      application.baseUrl,
+      "/api/v1/app/gateways/presence",
+      {
+        method: "POST",
+        headers: bridgeHeaders,
+        body: {
+          gatewayId: "computer-one",
+          pairingCode: "482913",
+          connected: true
+        }
+      }
+    );
+    assert.equal(presence.response.status, 200);
+    assert.equal(presence.body.gateway.connected, true);
+    assert.equal(presence.body.gateway.user, null);
+
+    const anonymousBind = await request(
+      application.baseUrl,
+      "/api/v1/gateways/bind",
+      {
+        method: "POST",
+        body: { pairingCode: "482913" }
+      }
+    );
+    assert.equal(anonymousBind.response.status, 401);
+
+    const bound = await request(
+      application.baseUrl,
+      "/api/v1/gateways/bind",
+      {
+        method: "POST",
+        cookie: registered.cookie,
+        body: { pairingCode: "482913" }
+      }
+    );
+    assert.equal(bound.response.status, 200);
+    assert.equal(bound.body.gateway.user.email, "lin@example.test");
+
+    const owner = await request(
+      application.baseUrl,
+      "/api/v1/app/gateways/computer-one/owner",
+      { headers: bridgeHeaders }
+    );
+    assert.equal(owner.response.status, 200);
+    assert.equal(owner.body.user.id, registered.body.user.id);
+
+    const logout = await request(
+      application.baseUrl,
+      "/api/v1/auth/logout",
+      {
+        method: "POST",
+        cookie: registered.cookie,
+        body: {}
+      }
+    );
+    assert.equal(logout.response.status, 200);
+
+    const unbound = await request(
+      application.baseUrl,
+      "/api/v1/app/gateways/computer-one/owner",
+      { headers: bridgeHeaders }
+    );
+    assert.equal(unbound.response.status, 404);
+    assert.equal(unbound.body.error.code, "GATEWAY_NOT_BOUND");
+  } finally {
+    await application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("users can become pen pals, exchange web letters and manage drafts", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "letter-space-"));
+  const application = await listen(join(directory, "letters.sqlite"));
+  try {
+    const sender = await register(
+      application.baseUrl,
+      "林安",
+      "lin@example.test"
+    );
+    const recipient = await register(
+      application.baseUrl,
+      "小明",
+      "ming@example.test"
+    );
+
+    const requestFriend = await request(
+      application.baseUrl,
+      "/api/v1/friends/request",
+      {
+        method: "POST",
+        cookie: sender.cookie,
+        body: { email: "ming@example.test" }
+      }
+    );
+    assert.equal(requestFriend.response.status, 200);
+    assert.equal(requestFriend.body.outgoing.length, 1);
+
+    const beforeAccept = await request(
+      application.baseUrl,
+      "/api/v1/letters",
+      {
+        method: "POST",
+        cookie: sender.cookie,
+        body: {
+          recipientUserId: recipient.body.user.id,
+          subject: "寄不出去的信",
+          content: "现在还不是笔友。"
+        }
+      }
+    );
+    assert.equal(beforeAccept.response.status, 403);
+
+    const accept = await request(
+      application.baseUrl,
+      `/api/v1/friends/${sender.body.user.id}/accept`,
+      {
+        method: "POST",
+        cookie: recipient.cookie,
+        body: {}
+      }
+    );
+    assert.equal(accept.response.status, 200);
+    assert.equal(accept.body.friends.length, 1);
+
+    const draft = await request(
+      application.baseUrl,
+      "/api/v1/drafts",
+      {
+        method: "POST",
+        cookie: sender.cookie,
+        body: {
+          recipientUserId: recipient.body.user.id,
+          subject: "周末",
+          content: "这周末"
+        }
+      }
+    );
+    assert.equal(draft.response.status, 201);
+
+    const updated = await request(
+      application.baseUrl,
+      `/api/v1/drafts/${draft.body.draft.id}`,
+      {
+        method: "PUT",
+        cookie: sender.cookie,
+        body: {
+          recipientUserId: recipient.body.user.id,
+          subject: "周末的来信",
+          content: "这周末我去了西湖。"
+        }
+      }
+    );
+    assert.equal(updated.response.status, 200);
+    assert.equal(updated.body.draft.content, "这周末我去了西湖。");
+
+    const sent = await request(
+      application.baseUrl,
+      "/api/v1/letters",
+      {
+        method: "POST",
+        cookie: sender.cookie,
+        body: {
+          recipientUserId: recipient.body.user.id,
+          subject: updated.body.draft.subject,
+          content: updated.body.draft.content,
+          draftId: draft.body.draft.id
+        }
+      }
+    );
+    assert.equal(sent.response.status, 201);
+
+    const recipientInbox = await request(
+      application.baseUrl,
+      "/api/v1/letters?box=inbox",
+      { cookie: recipient.cookie }
+    );
+    assert.equal(recipientInbox.body.letters.length, 1);
+    assert.equal(recipientInbox.body.letters[0].subject, "周末的来信");
+
+    const draftsAfterSend = await request(
+      application.baseUrl,
+      "/api/v1/drafts",
+      { cookie: sender.cookie }
+    );
+    assert.equal(draftsAfterSend.body.drafts.length, 0);
+  } finally {
+    await application.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("drafts are private to their owner", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "letter-space-"));
+  const application = await listen(join(directory, "letters.sqlite"));
+  try {
+    const owner = await register(
+      application.baseUrl,
+      "林安",
+      "lin@example.test"
+    );
+    const stranger = await register(
+      application.baseUrl,
+      "路人",
+      "stranger@example.test"
+    );
+    const created = await request(application.baseUrl, "/api/v1/drafts", {
+      method: "POST",
+      cookie: owner.cookie,
+      body: { subject: "私人草稿", content: "只属于我。" }
+    });
+
+    const deletion = await request(
+      application.baseUrl,
+      `/api/v1/drafts/${created.body.draft.id}`,
+      { method: "DELETE", cookie: stranger.cookie }
+    );
+    assert.equal(deletion.response.status, 404);
+
+    const ownerDrafts = await request(
+      application.baseUrl,
+      "/api/v1/drafts",
+      { cookie: owner.cookie }
+    );
+    assert.equal(ownerDrafts.body.drafts.length, 1);
   } finally {
     await application.close();
     await rm(directory, { recursive: true, force: true });

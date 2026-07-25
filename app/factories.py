@@ -9,8 +9,10 @@ from pathlib import Path
 from app.asr.base import ASRBackend
 from app.asr.faster_whisper_backend import FasterWhisperBackend
 from app.asr.mock_backend import MockASRBackend
+from app.asr.openai_http_backend import OpenAIHTTPASRBackend
 from app.audio.vad.base import VADBackend
 from app.audio.vad.silero_backend import SileroVADBackend
+from app.audio.vad.energy_backend import EnergyVADBackend
 from app.config import AppConfig, ConfigurationError
 from app.vision.base import GestureBackend
 from app.vision.mediapipe_gesture import MediaPipeGestureBackend
@@ -71,14 +73,22 @@ def build_asr(config: AppConfig) -> ASRBackend:
             config.asr.compute_type,
             config.asr.language,
         )
+    if config.asr.backend == "openai_http":
+        return OpenAIHTTPASRBackend(config.asr)
     raise ConfigurationError(f"unsupported ASR backend: {config.asr.backend}")
 
 
 def build_vad(config: AppConfig) -> VADBackend:
     if config.vad.backend == "silero":
         return SileroVADBackend(config.vad.model)
+    if config.vad.backend == "energy":
+        return EnergyVADBackend(
+            config.vad.energy_noise_floor,
+            config.vad.energy_speech_level,
+        )
     raise ConfigurationError(
-        f"unsupported VAD backend: {config.vad.backend}; expected silero"
+        f"unsupported VAD backend: {config.vad.backend}; "
+        "expected silero or energy"
     )
 
 

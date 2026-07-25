@@ -1,0 +1,70 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      AI_HUB_BRIDGE_TOKEN: ${AI_HUB_BRIDGE_TOKEN:-local-web-bridge-token-change-me}
+      DATABASE_PATH: /data/letters.sqlite
+      HOST: 0.0.0.0
+      PORT: "8080"
+      SECURE_COOKIES: "false"
+    ports:
+      - "${WEB_HOST_PORT:-18000}:8080"
+    volumes:
+      - web-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  cloud:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloud.local
+    command:
+      - python
+      - -m
+      - app.cloud_main
+      - --config
+      - config/app.yaml
+    environment:
+      AI_HUB_BRIDGE_TOKEN: ${AI_HUB_BRIDGE_TOKEN:-local-web-bridge-token-change-me}
+      AI_HUB_WEB_URL: http://web:8080
+      BOT_GATEWAY_TOKEN: ${BOT_GATEWAY_TOKEN:-local-gateway-token-change-me}
+      PERCEPTION_LOG_PATH: /data/logs/perception.log
+      PORT: "8080"
+    ports:
+      - "${CLOUD_HOST_PORT:-8090}:8080"
+    volumes:
+      - ./config/llm.yaml:/app/config/llm.yaml:ro
+      - ./models:/app/models:ro
+      - cloud-data:/data
+      - cloud-letters:/app/generated_letters
+      - cloud-photos:/app/captured_photos
+      - cloud-logs:/app/logs
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=2)"
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+volumes:
+  web-data:
+  cloud-data:
+  cloud-letters:
+  cloud-photos:
+  cloud-logs:

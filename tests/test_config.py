@@ -9,13 +9,11 @@ from app.hardware_main import build_parser, validate_mode_arguments
 def test_config_defaults():
     config = load_config()
     assert config.audio.target_sample_rate == 16_000
-    assert config.hardware.audio_port == 8081
-    assert config.hardware.vision_port == 8082
-    assert config.keywords.wake
+    assert config.hardware.audio_port == 8080
+    assert config.hardware.vision_port == 8081
     assert config.keywords.photo_print
     assert config.perception.vision_max_fps == 5
     assert config.application.photo_delay_seconds == 1
-    assert config.application.default_language == "zh"
     assert config.printer.base_url == "http://10.76.7.129"
     assert config.printer.width == 384
     assert config.printer.cooldown_seconds == 2
@@ -38,7 +36,15 @@ def test_config_defaults():
         "小A，取消问答",
         "小A，不要回答了",
     ]
+    assert config.llm.modes.qa.finish_phrases == [
+        "小A，请回答",
+        "小A，问题说完了",
+        "请回答",
+        "问题说完了",
+    ]
     assert config.api.port == 8090
+    assert config.asr.endpoint == "/audio/transcriptions"
+    assert config.vad.energy_noise_floor < config.vad.energy_speech_level
 
 
 def test_repository_config_loads():
@@ -127,7 +133,6 @@ def test_config_rejects_invalid_letter_settings(tmp_path, body):
         "web_letter_sync:\n  enabled: sometimes\n",
         "web_letter_sync:\n  base_url: ''\n",
         "web_letter_sync:\n  endpoint: api/v1/app/voice-letters\n",
-        "web_letter_sync:\n  sender_email_env: ''\n",
         "web_letter_sync:\n  bridge_token_env: ''\n",
         "web_letter_sync:\n  timeout_seconds: 0\n",
     ],
@@ -296,6 +301,23 @@ api_key: sentinel-secret
     assert config.llm.provider.api_key == "sentinel-secret"
     assert config.llm.user_nickname == "小面包"
     assert "sentinel-secret" not in repr(config)
+
+
+def test_load_config_accepts_llm_provider_from_environment(
+    tmp_path,
+    monkeypatch,
+):
+    app_path = tmp_path / "app.yaml"
+    app_path.write_text("llm:\n  enabled: true\n", encoding="utf-8")
+    monkeypatch.setenv("AI_BOT_LLM_BASE_URL", "https://cloud.test/v1")
+    monkeypatch.setenv("AI_BOT_LLM_MODEL", "cloud-model")
+    monkeypatch.setenv("AI_BOT_LLM_API_KEY", "cloud-secret")
+
+    config = load_config(app_path)
+
+    assert config.llm.available is True
+    assert config.llm.provider is not None
+    assert config.llm.provider.model == "cloud-model"
 
 
 def test_enabled_llm_without_private_file_is_unavailable(tmp_path):

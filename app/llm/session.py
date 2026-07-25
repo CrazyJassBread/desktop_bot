@@ -30,6 +30,9 @@ class _ActiveSession:
     last_activity: float
     transcripts: list[str] = field(default_factory=list)
     character_count: int = 0
+    owner_user_id: str | None = None
+    owner_email: str | None = None
+    owner_display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,9 @@ class _GenerationRequest:
     recipient: str | None
     transcripts: tuple[str, ...]
     started_at: float
+    owner_user_id: str | None
+    owner_email: str | None
+    owner_display_name: str | None
 
 
 class LLMSessionManager:
@@ -109,7 +115,9 @@ class LLMSessionManager:
             else "qa"
         )
         recipient = str(event.payload.get("payload_text", "")).strip()
+        initial_text = ""
         if mode != "letter":
+            initial_text = recipient
             recipient = self.config.user_nickname
         now = self.clock()
         self._session = _ActiveSession(
@@ -124,6 +132,18 @@ class LLMSessionManager:
             ),
             started_at=now,
             last_activity=now,
+            transcripts=[initial_text] if initial_text else [],
+            character_count=len(initial_text),
+            owner_user_id=(
+                str(event.payload.get("owner_user_id", "")).strip() or None
+            ),
+            owner_email=(
+                str(event.payload.get("owner_email", "")).strip() or None
+            ),
+            owner_display_name=(
+                str(event.payload.get("owner_display_name", "")).strip()
+                or None
+            ),
         )
         self._restart_watchdog_locked()
         self._log(
@@ -193,10 +213,17 @@ class LLMSessionManager:
                 )
                 self._clear_locked()
                 return (cancelled,), None
-            if normalized in {
+            normalized_finish_phrases = {
                 normalize_text(item)
                 for item in mode_config.finish_phrases
-            }:
+            }
+            if (
+                normalized in normalized_finish_phrases
+                or any(
+                    normalized.endswith(phrase)
+                    for phrase in normalized_finish_phrases
+                )
+            ):
                 if session.phase == "awaiting_recipient":
                     return self._fail_locked("recipient_required"), None
                 if not session.transcripts:
@@ -210,6 +237,9 @@ class LLMSessionManager:
                     recipient=session.recipient,
                     transcripts=tuple(session.transcripts),
                     started_at=session.started_at,
+                    owner_user_id=session.owner_user_id,
+                    owner_email=session.owner_email,
+                    owner_display_name=session.owner_display_name,
                 )
         else:
             text = forced_body
@@ -310,6 +340,14 @@ class LLMSessionManager:
                 "fragment_count": len(request.transcripts),
                 "elapsed_ms": elapsed_ms,
             }
+            if request.mode == "letter" and request.owner_user_id is not None:
+                payload.update(
+                    {
+                        "owner_user_id": request.owner_user_id,
+                        "owner_email": request.owner_email,
+                        "owner_display_name": request.owner_display_name,
+                    }
+                )
             completed = self._event(event_type, session, payload)
             self._log(
                 "session_completed",

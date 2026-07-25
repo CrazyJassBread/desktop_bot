@@ -15,6 +15,7 @@ def completed_letter() -> PerceptionEvent:
         payload={
             "recipient": "小明",
             "content": "这是通过语音写好的一封信。",
+            "owner_user_id": "sender-user",
         },
     )
 
@@ -29,7 +30,6 @@ async def test_manager_sends_completed_voice_letter_to_web():
 
     manager = WebLetterSyncManager(
         WebLetterSyncConfig(enabled=True),
-        sender_email="sender@example.com",
         bridge_token="secret-token",
         transport=transport,
     )
@@ -46,7 +46,7 @@ async def test_manager_sends_completed_voice_letter_to_web():
 
     assert requests == [
         {
-            "senderEmail": "sender@example.com",
+            "senderUserId": "sender-user",
             "recipient": "小明",
             "subject": "写给小明的语音信件",
             "content": "这是通过语音写好的一封信。",
@@ -71,7 +71,6 @@ async def test_manager_reports_web_sync_failure_without_crashing_app():
 
     manager = WebLetterSyncManager(
         WebLetterSyncConfig(enabled=True),
-        sender_email="sender@example.com",
         bridge_token="secret-token",
         transport=transport,
     )
@@ -92,10 +91,59 @@ async def test_manager_reports_web_sync_failure_without_crashing_app():
 
 
 @pytest.mark.asyncio
+async def test_manager_sends_locked_owner_id():
+    requests: list[dict[str, object]] = []
+    manager = WebLetterSyncManager(
+        WebLetterSyncConfig(enabled=True),
+        bridge_token="secret-token",
+        transport=lambda payload: (
+            requests.append(payload)
+            or {"letter": {"id": "letter-owner"}}
+        ),
+    )
+    event = completed_letter()
+    event.payload["owner_user_id"] = "user-one"
+
+    manager.schedule(event)
+    await manager.wait_idle()
+
+    assert requests[0]["senderUserId"] == "user-one"
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_manager_refuses_to_sync_without_locked_owner():
+    requests: list[dict[str, object]] = []
+    emitted: list[PerceptionEvent] = []
+    manager = WebLetterSyncManager(
+        WebLetterSyncConfig(enabled=True),
+        bridge_token="secret-token",
+        transport=lambda payload: (
+            requests.append(payload)
+            or {"letter": {"id": "must-not-save"}}
+        ),
+    )
+
+    async def emit(event: PerceptionEvent) -> None:
+        emitted.append(event)
+
+    manager.set_event_emitter(emit)
+    event = completed_letter()
+    event.payload.pop("owner_user_id")
+
+    manager.schedule(event)
+    await manager.wait_idle()
+
+    assert requests == []
+    assert emitted[0].event_type == "web.letter_sync_failed"
+    assert emitted[0].payload["reason"] == "user_not_bound"
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_manager_ignores_non_letter_events():
     manager = WebLetterSyncManager(
         WebLetterSyncConfig(enabled=True),
-        sender_email="sender@example.com",
         bridge_token="secret-token",
         transport=lambda payload: {"letter": {"id": "unused"}},
     )

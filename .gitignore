@@ -24,4 +24,5 @@ received_images/
 microphone.wav
 
 .env
+.env.docker.local
 /config/llm.yaml

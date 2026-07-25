@@ -48,6 +48,19 @@ def _template_recipient(
     return recipient or None
 
 
+def _text_after_phrase(transcript: str, phrase: str) -> str:
+    normalized, original_indexes = _normalized_with_indexes(transcript)
+    normalized_phrase = normalize_text(phrase)
+    position = normalized.find(normalized_phrase)
+    end = position + len(normalized_phrase)
+    if position < 0 or end >= len(original_indexes):
+        return ""
+    original_start = original_indexes[end]
+    return transcript[original_start:].strip(
+        " \t\r\n，。！？、,.!?;；:：\"'“”‘’（）()[]【】"
+    )
+
+
 class LLMModeDetector:
     def __init__(self, modes: LLMModesConfig) -> None:
         self.modes = modes
@@ -79,6 +92,7 @@ class LLMModeDetector:
                     "llm.qa.start",
                     phrase,
                     transcript,
+                    _text_after_phrase(transcript, phrase),
                 )
         return None
 

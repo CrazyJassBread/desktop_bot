@@ -35,7 +35,37 @@ export const api = {
     method: "POST",
     body: JSON.stringify({})
   }),
+  gateways: () => request("/gateways"),
+  bindGateway: (pairingCode) => request("/gateways/bind", {
+    method: "POST",
+    body: JSON.stringify({ pairingCode })
+  }),
   letters: (box = "all") => request(
     `/letters?box=${encodeURIComponent(box)}`
-  )
+  ),
+  sendLetter: (payload) => request("/letters", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }),
+  friends: () => request("/friends"),
+  requestFriend: (email) => request("/friends/request", {
+    method: "POST",
+    body: JSON.stringify({ email })
+  }),
+  acceptFriend: (userId) => request(
+    `/friends/${encodeURIComponent(userId)}/accept`,
+    { method: "POST", body: JSON.stringify({}) }
+  ),
+  drafts: () => request("/drafts"),
+  createDraft: (payload) => request("/drafts", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  }),
+  updateDraft: (id, payload) => request(
+    `/drafts/${encodeURIComponent(id)}`,
+    { method: "PUT", body: JSON.stringify(payload) }
+  ),
+  deleteDraft: (id) => request(`/drafts/${encodeURIComponent(id)}`, {
+    method: "DELETE"
+  })
 };

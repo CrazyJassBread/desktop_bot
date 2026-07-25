@@ -1,0 +1,120 @@
+audio:
+  target_sample_rate: 16000
+
+asr:
+  backend: openai_http
+  model: whisper-1
+  language: zh
+  base_url: ""
+  endpoint: /audio/transcriptions
+  base_url_env: AI_BOT_ASR_BASE_URL
+  api_key_env: AI_BOT_ASR_API_KEY
+  model_env: AI_BOT_ASR_MODEL
+  timeout_seconds: 60
+
+hardware:
+  audio_enabled: true
+  audio_host: 0.0.0.0
+  audio_port: 8080
+  audio_frame_samples: 512
+  audio_queue_size: 256
+  vision_enabled: true
+  vision_host: 0.0.0.0
+  vision_port: 8081
+  vision_upload_path: /upload
+  session_id: bot
+
+vad:
+  enabled: true
+  backend: energy
+  model: unused
+  speech_threshold: 0.60
+  release_threshold: 0.35
+  min_speech_duration_ms: 250
+  min_silence_duration_ms: 1200
+  pre_roll_ms: 200
+  max_utterance_seconds: 30
+  energy_noise_floor: 0.012
+  energy_speech_level: 0.045
+
+perception:
+  event_cache_capacity: 200
+  event_ttl_seconds: 1800
+  utterance_queue_size: 4
+  vision_max_fps: 5
+
+vision:
+  enabled: true
+  backend: mediapipe
+  gesture_model: models/gesture_recognizer.task
+  image_width: 640
+  image_height: 480
+  max_image_bytes: 2097152
+  max_hands: 2
+  score_threshold: 0.70
+  mode_window_size: 3
+  mode_required_hits: 2
+  release_frames: 2
+  gesture_window_size: 3
+  gesture_required_hits: 2
+
+application:
+  photo_enabled: true
+  photo_delay_seconds: 1.0
+  photo_frame_max_age_seconds: 1.0
+  photo_output_dir: /data/photos
+  photo_processor_url: ""
+  downstream_timeout_seconds: 15.0
+
+printer:
+  enabled: true
+  base_url: http://local-gateway.invalid
+  width: 384
+  max_chunk_height: 1200
+  pixel_size: 6
+  grayscale_levels: 4
+  contrast: 1.2
+  brightness: 1.0
+  dither: true
+  rotate_180: false
+  timeout_seconds: 45
+  cooldown_seconds: 2.0
+
+bot_expression:
+  enabled: true
+  base_url: http://local-gateway.invalid
+  endpoint: /oled/expression
+  timeout_seconds: 10
+  action_duration_seconds: 2
+
+web_letter_sync:
+  enabled: true
+  base_url: http://ai-hub-web.zeabur.internal:8080
+  endpoint: /api/v1/app/voice-letters
+  bridge_token_env: AI_HUB_BRIDGE_TOKEN
+  timeout_seconds: 15
+
+letter:
+  enabled: true
+  auto_print: false
+  output_dir: /data/letters
+  font_path: ""
+  stamp_selection: random
+  stamp_themes: [flower, moon, envelope]
+  postmark_style: wave_date
+  show_signature: true
+  max_print_characters: 2000
+
+llm:
+  enabled: true
+  timeout_seconds: 60
+  temperature: 0.4
+  max_output_tokens: 2000
+  log_path: /data/logs/llm.log
+  user_nickname: 用户
+
+api:
+  enabled: true
+  host: 0.0.0.0
+  port: 8090
+  websocket_path: /api/events

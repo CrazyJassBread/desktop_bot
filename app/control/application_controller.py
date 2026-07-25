@@ -1,22 +1,19 @@
-"""Interpret perception events using the current application state."""
+"""Route the three supported product flows."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Awaitable, Callable
 
 from app.perception_events import PerceptionEvent
 
 EventEmitter = Callable[[PerceptionEvent], Awaitable[None]]
+OwnerResolver = Callable[[], Awaitable[dict[str, str] | None]]
 
 
 @dataclass
 class AppState:
-    language: str = "zh"
-    chat_active: bool = False
-    chat_session_id: str | None = None
     photo_state: str = "idle"
-    active_feature: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -26,18 +23,19 @@ class ApplicationController:
     def __init__(
         self,
         *,
-        default_language: str = "zh",
         photo_manager: object | None = None,
         llm_session_manager: object | None = None,
         letter_manager: object | None = None,
         web_letter_manager: object | None = None,
+        letter_owner_resolver: OwnerResolver | None = None,
         llm_unavailable_reason: str | None = None,
     ) -> None:
-        self.state = AppState(language=default_language)
+        self.state = AppState()
         self.photo_manager = photo_manager
         self.llm_session_manager = llm_session_manager
         self.letter_manager = letter_manager
         self.web_letter_manager = web_letter_manager
+        self.letter_owner_resolver = letter_owner_resolver
         self.llm_unavailable_reason = llm_unavailable_reason
         self._emit: EventEmitter | None = None
 
@@ -68,28 +66,64 @@ class ApplicationController:
     ) -> tuple[PerceptionEvent, ...]:
         if event.event_type in {"llm.letter.start", "llm.qa.start"}:
             if self.llm_session_manager is not None:
+                if (
+                    event.event_type == "llm.letter.start"
+                    and self.letter_owner_resolver is not None
+                ):
+                    try:
+                        owner = await self.letter_owner_resolver()
+                    except Exception:
+                        return (
+                            self._result(
+                                "llm.session_rejected",
+                                event,
+                                {
+                                    "mode": "letter",
+                                    "reason": "user_identity_unavailable",
+                                },
+                            ),
+                        )
+                    if owner is None:
+                        return (
+                            self._result(
+                                "llm.session_rejected",
+                                event,
+                                {
+                                    "mode": "letter",
+                                    "reason": "user_not_bound",
+                                },
+                            ),
+                        )
+                    event = replace(
+                        event,
+                        payload={
+                            **event.payload,
+                            "owner_user_id": owner["id"],
+                            "owner_email": owner["email"],
+                            "owner_display_name": owner["displayName"],
+                        },
+                    )
                 events = await getattr(
                     self.llm_session_manager,
                     "handle",
                 )(event)
                 self._schedule_completed_letters(events)
                 return events
-            if self.llm_unavailable_reason is not None:
-                mode = (
-                    "letter"
-                    if event.event_type == "llm.letter.start"
-                    else "qa"
-                )
-                return (
-                    self._result(
-                        "llm.session_rejected",
-                        event,
-                        {
-                            "mode": mode,
-                            "reason": self.llm_unavailable_reason,
-                        },
-                    ),
-                )
+            mode = (
+                "letter"
+                if event.event_type == "llm.letter.start"
+                else "qa"
+            )
+            return (
+                self._result(
+                    "llm.session_rejected",
+                    event,
+                    {
+                        "mode": mode,
+                        "reason": self.llm_unavailable_reason or "disabled",
+                    },
+                ),
+            )
         if self.llm_session_manager is not None:
             if event.event_type == "speech.transcribed":
                 events = await getattr(
@@ -103,39 +137,10 @@ class ApplicationController:
                 and event.source == "audio"
             ):
                 return ()
-        if event.event_type in {"wake", "mode.enter_chat"}:
-            return self._start_chat(event)
-        if event.event_type == "mode.exit_chat":
-            return self._stop_chat(event)
-        if event.event_type == "speech.transcribed":
-            return self._route_transcript(event)
-        if event.event_type == "feature.write_letter":
-            return (
-                self._command(
-                    "letter.compose",
-                    event,
-                    {"content": event.payload.get("payload_text", "")},
-                ),
-            )
-        if event.event_type.startswith("intent."):
-            command_type = event.event_type.removeprefix("intent.")
-            return (
-                self._command(
-                    command_type,
-                    event,
-                    {
-                        "text": event.payload.get("payload_text", ""),
-                        "language": self.state.language,
-                    },
-                ),
-            )
-        if event.event_type == "gesture.open_palm":
-            return self._switch_language(event)
         if event.event_type in {"gesture.victory", "feature.photo_print"}:
             return self._start_photo_print(event)
         if event.event_type == "photo.captured":
             self.state.photo_state = "processing"
-            self.state.active_feature = "photo"
             return ()
         if event.event_type in {
             "photo.completed",
@@ -143,10 +148,6 @@ class ApplicationController:
             "photo.print_failed",
         }:
             self.state.photo_state = "idle"
-            if self.state.active_feature == "photo":
-                self.state.active_feature = (
-                    "chat" if self.state.chat_active else None
-                )
             return ()
         return ()
 
@@ -185,91 +186,6 @@ class ApplicationController:
                     "delay_ms": int(
                         getattr(self.photo_manager, "delay_seconds") * 1_000
                     )
-                },
-            ),
-        )
-
-    def _start_chat(
-        self,
-        event: PerceptionEvent,
-    ) -> tuple[PerceptionEvent, ...]:
-        self.state.chat_active = True
-        self.state.chat_session_id = event.session_id
-        self.state.active_feature = "chat"
-        events = [
-            self._command(
-                "chat.start",
-                event,
-                {"language": self.state.language},
-            )
-        ]
-        question = str(event.payload.get("payload_text", "")).strip()
-        if question:
-            events.append(
-                self._command(
-                    "chat.ask",
-                    event,
-                    {
-                        "question": question,
-                        "language": self.state.language,
-                    },
-                )
-            )
-        return tuple(events)
-
-    def _stop_chat(
-        self,
-        event: PerceptionEvent,
-    ) -> tuple[PerceptionEvent, ...]:
-        was_active = self.state.chat_active
-        self.state.chat_active = False
-        self.state.chat_session_id = None
-        if self.state.active_feature == "chat":
-            self.state.active_feature = None
-        if not was_active:
-            return ()
-        return (self._command("chat.stop", event, {}),)
-
-    def _route_transcript(
-        self,
-        event: PerceptionEvent,
-    ) -> tuple[PerceptionEvent, ...]:
-        # A matching keyword has its own event and is routed there. This avoids
-        # sending "退出聊天" or "开始聊天" as a normal question as well.
-        if event.payload.get("matched_event") is not None:
-            return ()
-        transcript = str(event.payload.get("transcript", "")).strip()
-        if not self.state.chat_active or not transcript:
-            return ()
-        return (
-            self._command(
-                "chat.ask",
-                event,
-                {
-                    "question": transcript,
-                    "language": self.state.language,
-                },
-            ),
-        )
-
-    def _switch_language(
-        self,
-        event: PerceptionEvent,
-    ) -> tuple[PerceptionEvent, ...]:
-        previous = self.state.language
-        self.state.language = "en" if previous == "zh" else "zh"
-        return (
-            self._command(
-                "language.set",
-                event,
-                {"language": self.state.language},
-            ),
-            self._result(
-                "language.changed",
-                event,
-                {
-                    "previous": previous,
-                    "current": self.state.language,
                 },
             ),
         )

@@ -131,14 +131,20 @@ def format_input_devices() -> str:
 def build_daemon(
     config: AppConfig,
     args: argparse.Namespace,
+    *,
+    audio_source_override=None,
+    image_source_override=None,
+    expression_sender=None,
+    printer_override=None,
+    letter_owner_resolver=None,
 ) -> tuple[PerceptionDaemon, GestureBackend | None]:
     microphone_mode = args.mode == "mic-test"
-    audio_enabled = (
+    audio_enabled = audio_source_override is not None or (
         True
         if microphone_mode
         else config.hardware.audio_enabled and not args.vision_only
     )
-    vision_enabled = (
+    vision_enabled = image_source_override is not None or (
         False
         if microphone_mode
         else config.hardware.vision_enabled and not args.audio_only
@@ -169,32 +175,29 @@ def build_daemon(
 
     if config.bot_expression.enabled:
         expression_controller = BotExpressionController(
-            config.bot_expression
+            config.bot_expression,
+            sender=expression_sender,
         )
 
     if config.web_letter_sync.enabled:
-        sender_email = os.environ.get(
-            config.web_letter_sync.sender_email_env,
-            "",
-        ).strip()
         bridge_token = os.environ.get(
             config.web_letter_sync.bridge_token_env,
             "",
         ).strip()
-        if sender_email and bridge_token:
+        if bridge_token:
             web_letter_manager = WebLetterSyncManager(
                 config.web_letter_sync,
-                sender_email=sender_email,
                 bridge_token=bridge_token,
             )
         else:
             LOGGER.warning(
-                "Web letter sync disabled at runtime; set %s and %s",
-                config.web_letter_sync.sender_email_env,
+                "Web letter sync disabled at runtime; set %s",
                 config.web_letter_sync.bridge_token_env,
             )
 
-    if config.printer.enabled:
+    if printer_override is not None:
+        printer = printer_override
+    elif config.printer.enabled:
         printer = ThermalPrinterClient(
             config.printer.base_url,
             width=config.printer.width,
@@ -211,7 +214,9 @@ def build_daemon(
     if audio_enabled:
         if not config.vad.enabled:
             raise ConfigurationError("hardware audio requires vad.enabled=true")
-        if microphone_mode:
+        if audio_source_override is not None:
+            audio_source = audio_source_override
+        elif microphone_mode:
             audio_source = LocalMicrophoneAudioSource(
                 device=args.input_device,
                 sample_rate=config.audio.target_sample_rate,
@@ -265,18 +270,20 @@ def build_daemon(
             raise ConfigurationError(
                 "hardware vision requires vision.enabled=true"
             )
-        image_source = HTTPJPEGImageSource(
-            args.vision_host or config.hardware.vision_host,
-            (
-                args.vision_port
-                if args.vision_port is not None
-                else config.hardware.vision_port
-            ),
-            upload_path=config.hardware.vision_upload_path,
-            max_image_bytes=config.vision.max_image_bytes,
-            queue_size=1,
-            default_session_id=session_id,
-        )
+        image_source = image_source_override
+        if image_source is None:
+            image_source = HTTPJPEGImageSource(
+                args.vision_host or config.hardware.vision_host,
+                (
+                    args.vision_port
+                    if args.vision_port is not None
+                    else config.hardware.vision_port
+                ),
+                upload_path=config.hardware.vision_upload_path,
+                max_image_bytes=config.vision.max_image_bytes,
+                queue_size=1,
+                default_session_id=session_id,
+            )
         gesture_backend = build_gesture(config)
         vision_processor = ContinuousVisionProcessor(
             config.vision,
@@ -300,11 +307,11 @@ def build_daemon(
             )
 
     controller = ApplicationController(
-        default_language=config.application.default_language,
         photo_manager=photo_manager,
         llm_session_manager=llm_session_manager,
         letter_manager=letter_manager,
         web_letter_manager=web_letter_manager,
+        letter_owner_resolver=letter_owner_resolver,
         llm_unavailable_reason=config.llm.unavailable_reason,
     )
 

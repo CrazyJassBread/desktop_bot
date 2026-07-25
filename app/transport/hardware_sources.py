@@ -23,7 +23,7 @@ class TCPPCMAudioSource(AudioFrameSource):
     def __init__(
         self,
         host: str = "0.0.0.0",
-        port: int = 8081,  # NOTE: Audio 的接收端口
+        port: int = 8080,  # NOTE: Audio 的接收端口
         *,
         sample_rate: int = 16_000,
         frame_samples: int = 512,
@@ -194,7 +194,7 @@ class HTTPJPEGImageSource(ImageFrameSource):
     def __init__(
         self,
         host: str = "0.0.0.0",
-        port: int = 8082, #NOTE Image 的接收端口
+        port: int = 8081, #NOTE Image 的接收端口
         *,
         upload_path: str = "/upload",
         max_image_bytes: int = 2_097_152,

@@ -140,13 +140,10 @@ def gesture(label: str) -> GestureDetection:
     return GestureDetection(label, 0.95, "Right")
 
 
-def test_keyword_detector_prioritizes_features_and_ignores_chatter():
+def test_keyword_detector_only_matches_photo_shortcuts():
     detector = KeywordDetector(KeywordConfig())
-    match = detector.detect("小 A，帮我写信，内容是明天见")
-    assert match is not None
-    assert match.event_type == "feature.write_letter"
-    assert match.keyword == "帮我写信"
-    assert match.payload_text == "内容是明天见"
+    assert detector.detect("小 A，帮我写信，内容是明天见") is None
+    assert detector.detect("进入聊天模式") is None
     assert detector.detect("今天天气不错") is None
 
 
@@ -169,30 +166,11 @@ def test_keyword_detector_recognizes_photo_print_intents(transcript):
     assert match.event_type == "feature.photo_print"
 
 
-def test_keyword_detector_preserves_chat_question_text():
-    detector = KeywordDetector(KeywordConfig())
-    match = detector.detect("小 A，开始聊天：What is RL?")
-    assert match is not None
-    assert match.event_type == "mode.enter_chat"
-    assert match.payload_text == "What is RL"
-
-
-def test_custom_keyword_becomes_extensible_feature_command():
-    detector = KeywordDetector(
-        KeywordConfig(custom={"music.open": ["打开音乐"]})
-    )
-    match = detector.detect("小A，打开音乐，播放爵士")
-    assert match is not None
-    assert match.event_type == "intent.music.open"
-    assert match.payload_text == "播放爵士"
-
-
 @pytest.mark.asyncio
-async def test_llm_mode_detection_precedes_legacy_write_letter_keyword():
-    config = KeywordConfig(write_letter=["我要写信"])
+async def test_llm_mode_detector_starts_letter_session():
     processor = KeywordASRProcessor(
         SequenceASR(["我要写信"]),
-        KeywordDetector(config),
+        KeywordDetector(KeywordConfig()),
         llm_detector=LLMModeDetector(load_config().llm.modes),
     )
 
@@ -234,7 +212,7 @@ async def test_audio_runtime_keeps_transcripts_and_keyword_intents(caplog):
         ),
         vad,
     )
-    asr = SequenceASR(["今天天气不错", "小A，帮我写信"])
+    asr = SequenceASR(["今天天气不错", "请拍照"])
     cache = EventCache()
     daemon = PerceptionDaemon(
         cache,
@@ -256,13 +234,13 @@ async def test_audio_runtime_keeps_transcripts_and_keyword_intents(caplog):
     assert cache.latest() is not None
     assert [event.event_type for event in cache.snapshot()] == [
         "speech.transcribed",
-        "feature.write_letter",
+        "feature.photo_print",
         "speech.transcribed",
     ]
     assert '"transcript": "今天天气不错"' in caplog.text
     assert '"matched_event": null' in caplog.text
-    assert '"transcript": "小A，帮我写信"' in caplog.text
-    assert '"matched_event": "feature.write_letter"' in caplog.text
+    assert '"transcript": "请拍照"' in caplog.text
+    assert '"matched_event": "feature.photo_print"' in caplog.text
 
 
 @pytest.mark.asyncio
@@ -292,40 +270,20 @@ async def test_vision_emits_once_while_gesture_is_held_and_rearms():
 
 
 @pytest.mark.asyncio
-async def test_controller_routes_chat_and_language_commands():
+async def test_controller_ignores_removed_chat_and_language_events():
     controller = ApplicationController()
-    start = PerceptionEvent(
+    removed_chat = PerceptionEvent(
         "mode.enter_chat",
         "audio",
         payload={"payload_text": "什么是强化学习"},
     )
-    commands = await controller.handle(start)
-    assert controller.state.chat_active is True
-    assert [item.event_type for item in commands] == [
-        "command.chat.start",
-        "command.chat.ask",
-    ]
-
-    transcript = PerceptionEvent(
-        "speech.transcribed",
-        "audio",
-        payload={"transcript": "举个例子", "matched_event": None},
-    )
-    commands = await controller.handle(transcript)
-    assert commands[0].payload["parameters"]["question"] == "举个例子"
-
-    language = await controller.handle(
+    assert await controller.handle(removed_chat) == ()
+    assert await controller.handle(
         PerceptionEvent("gesture.open_palm", "vision")
-    )
-    assert controller.state.language == "en"
-    assert [item.event_type for item in language] == [
-        "command.language.set",
-        "language.changed",
-    ]
+    ) == ()
     victory = await controller.handle(
         PerceptionEvent("gesture.victory", "vision")
     )
-    assert controller.state.language == "en"
     assert [item.event_type for item in victory] == [
         "photo.capture_failed"
     ]
@@ -351,7 +309,7 @@ async def test_controller_delegates_llm_and_suppresses_only_audio_intents():
     suppressed = await controller.handle(
         PerceptionEvent("feature.photo_print", "audio")
     )
-    visual = await controller.handle(
+    removed_visual = await controller.handle(
         PerceptionEvent("gesture.open_palm", "vision")
     )
 
@@ -362,16 +320,71 @@ async def test_controller_delegates_llm_and_suppresses_only_audio_intents():
         "llm.transcript_buffered"
     ]
     assert suppressed == ()
-    assert [event.event_type for event in visual] == [
-        "command.language.set",
-        "language.changed",
-    ]
+    assert removed_visual == ()
     assert [event.event_type for event in llm_manager.calls] == [
         "llm.letter.start",
         "speech.transcribed",
     ]
     await controller.aclose()
     assert llm_manager.closed is True
+
+
+@pytest.mark.asyncio
+async def test_controller_rejects_letter_when_computer_has_no_logged_in_user():
+    llm_manager = RecordingLLMSessionManager()
+
+    async def no_owner():
+        return None
+
+    controller = ApplicationController(
+        llm_session_manager=llm_manager,
+        letter_owner_resolver=no_owner,
+    )
+
+    rejected = await controller.handle(
+        PerceptionEvent("llm.letter.start", "audio")
+    )
+
+    assert [event.event_type for event in rejected] == [
+        "llm.session_rejected"
+    ]
+    assert rejected[0].payload["reason"] == "user_not_bound"
+    assert llm_manager.calls == []
+    await controller.aclose()
+
+
+@pytest.mark.asyncio
+async def test_controller_adds_current_user_to_letter_start_event():
+    llm_manager = RecordingLLMSessionManager()
+
+    async def owner():
+        return {
+            "id": "user-one",
+            "email": "one@example.test",
+            "displayName": "用户一",
+        }
+
+    controller = ApplicationController(
+        llm_session_manager=llm_manager,
+        letter_owner_resolver=owner,
+    )
+
+    started = await controller.handle(
+        PerceptionEvent(
+            "llm.letter.start",
+            "audio",
+            payload={"payload_text": "小明"},
+        )
+    )
+
+    assert started[0].event_type == "llm.session_started"
+    assert llm_manager.calls[0].payload == {
+        "payload_text": "小明",
+        "owner_user_id": "user-one",
+        "owner_email": "one@example.test",
+        "owner_display_name": "用户一",
+    }
+    await controller.aclose()
 
 
 @pytest.mark.asyncio
@@ -428,7 +441,7 @@ async def test_controller_rejects_unavailable_llm_mode(
     rejected = await controller.handle(
         PerceptionEvent(event_type, "audio", session_id="bot")
     )
-    ordinary = await controller.handle(
+    removed = await controller.handle(
         PerceptionEvent("gesture.open_palm", "vision", session_id="bot")
     )
 
@@ -436,10 +449,7 @@ async def test_controller_rejects_unavailable_llm_mode(
     assert rejected[0].event_type == "llm.session_rejected"
     assert rejected[0].payload["mode"] == mode
     assert rejected[0].payload["reason"] == reason
-    assert [event.event_type for event in ordinary] == [
-        "command.language.set",
-        "language.changed",
-    ]
+    assert removed == ()
 
 
 @pytest.mark.asyncio

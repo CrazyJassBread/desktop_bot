@@ -38,7 +38,14 @@ await writeFile(
     name: "AI Hub Letter Space",
     builtAt: new Date().toISOString(),
     database: "SQLite",
-    routes: ["/login", "/register", "/letters"],
+    routes: [
+      "/login",
+      "/register",
+      "/letters",
+      "/friends",
+      "/drafts",
+      "/compose"
+    ],
     api: "/api/v1"
   }, null, 2)
 );

@@ -1,0 +1,15 @@
+.git
+.venv
+.worktrees
+__pycache__
+*.pyc
+.pytest_cache
+logs
+models
+captured_photos
+generated_letters
+integrations/ai-hub-os-web/data
+integrations/ai-hub-os-web/node_modules
+.env
+.env.local
+config/llm.yaml

@@ -23,12 +23,10 @@ class WebLetterSyncManager:
         self,
         config: WebLetterSyncConfig,
         *,
-        sender_email: str,
         bridge_token: str,
         transport: Transport | None = None,
     ) -> None:
         self.config = config
-        self.sender_email = sender_email
         self.bridge_token = bridge_token
         self.url = f"{config.base_url.rstrip('/')}{config.endpoint}"
         self._transport = transport or self._post
@@ -54,12 +52,30 @@ class WebLetterSyncManager:
         recipient = str(completed.payload.get("recipient", "")).strip()
         content = str(completed.payload.get("content", "")).strip()
         payload: dict[str, object] = {
-            "senderEmail": self.sender_email,
             "recipient": recipient,
             "subject": f"写给{recipient}的语音信件",
             "content": content,
             "eventId": completed.event_id,
         }
+        owner_user_id = str(
+            completed.payload.get("owner_user_id", "")
+        ).strip()
+        if owner_user_id:
+            payload["senderUserId"] = owner_user_id
+        else:
+            await self._publish(
+                PerceptionEvent(
+                    event_type="web.letter_sync_failed",
+                    source="web",
+                    session_id=completed.session_id,
+                    payload={
+                        "trigger_event_id": completed.event_id,
+                        "recipient": recipient,
+                        "reason": "user_not_bound",
+                    },
+                )
+            )
+            return
         try:
             result = await asyncio.to_thread(self._transport, payload)
             letter = result.get("letter", {})

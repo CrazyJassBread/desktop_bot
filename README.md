@@ -1,8 +1,11 @@
 # Desktop Bot
 
-Desktop Bot 是一个面向桌面机器人硬件的持续感知与交互服务。它接收麦克风音频和
-摄像头图像，完成语音活动检测、语音识别、关键词/会话路由、手势识别、LLM
-问答与写信，并通过 HTTP/WebSocket API 向其他程序发布结构化事件。
+Desktop Bot 是一个面向桌面机器人硬件的持续感知与交互服务。当前产品只保留
+三条核心链路：语音写信、智能问答、`Victory` 手势拍照并打印。
+
+项目采用“云端服务 + 本地硬件网关”模式：ASR、视觉、LLM、网页和数据存储
+运行在服务器，本地电脑只转发 Bot 音频/图片并执行 OLED、打印指令。
+部署方法见 [Zeabur 部署说明](docs/zeabur-deployment.md)。
 
 ## 主要功能
 
@@ -10,7 +13,7 @@ Desktop Bot 是一个面向桌面机器人硬件的持续感知与交互服务�
 - 语音处理：Silero VAD 断句，Faster Whisper 中文 ASR。
 - LLM：支持 OpenAI-compatible API、智能问答和写信会话。
 - 信件：LLM 完成写信后生成 Slowly 风格的黑白信笺，添加收件人、
-  像素邮票、日期邮戳和用户署名，并自动使用热敏打印机输出。
+  像素邮票、日期邮戳和用户署名，并保存到网页登录用户的信件空间。
 - 视觉：接收 Bot 上传的 JPEG，使用 MediaPipe 识别稳定手势。
 - 照片：语音或 `Victory` 手势触发延迟拍照、图像处理和热敏打印。
 - 表情：把监听、生成、打印、完成和失败状态转换为 Bot OLED 表情。
@@ -21,7 +24,7 @@ Desktop Bot 是一个面向桌面机器人硬件的持续感知与交互服务�
 
 ```text
 Bot TCP PCM / 电脑麦克风
-        → Silero VAD → Faster Whisper → 关键词/LLM 会话
+        → VAD → ASR → 写信/问答会话
                                               │
 Bot HTTP JPEG → MediaPipe → 稳定手势 ─────────┤
                                               ↓
@@ -68,7 +71,7 @@ models/gesture_recognizer.task
 - `audio`、`vad`、`asr`：采样率、断句和语音识别；
 - `hardware`：Bot 音频和图像监听地址；
 - `vision`：图像尺寸、手势模型和稳定检测参数；
-- `keywords`：唤醒词、聊天、拍照和自定义命令；
+- `keywords`：可选的语音拍照快捷短语；
 - `llm`：LLM 开关、会话限制和语音控制短语；
 - `application`、`printer`：照片处理和打印；
 - `bot_expression`：Bot ESP 地址、表情接口和短动作时长；
@@ -119,7 +122,7 @@ bot_expression:
 
 默认状态转换：
 
-- 唤醒、进入会话、触发拍照：`blink`，随后保持 `happy`；
+- 开始 LLM 会话或触发拍照：`blink`，随后保持 `happy`；
 - ASR、LLM 生成、照片处理、信件渲染或打印：保持 `tired`；
 - 问答、照片或信件成功完成：`laugh`，随后恢复 `default`；
 - ASR、LLM、照片或打印失败：`confused`，随后保持 `angry`；
@@ -127,48 +130,56 @@ bot_expression:
 
 ## 运行方式
 
-### 完整 Bot 模式
+### 一键本地完整模拟（推荐）
 
-启动音频、视觉和 API：
-
-```bash
-python -m app
-```
-
-仅启动一个输入通道：
+Docker 已启动且模型、Python 环境就绪时，直接进入完整演示：
 
 ```bash
-python -m app --audio-only
-python -m app --vision-only
+./run-demo.sh
 ```
 
-覆盖监听地址或端口：
+它会启动网页、SQLite 数据库、App 服务、本地 ASR，自动创建两个演示账号，
+并使用电脑默认麦克风和摄像头模拟 Bot 输入。打印机和 OLED 使用安全演示模式，
+不会操作真实硬件。启动前会先执行 Python 和网页自动测试；按 `Ctrl+C` 会停止
+全部服务，但保留数据库数据。已验证过代码时可用 `./run-demo.sh --skip-tests`
+跳过自动测试。
+
+演示账号密码均为 `demo-password-123`：
+
+- 发件人：`demo-sender@local.test`
+- 收件人：`demo-recipient@local.test`，显示名为“演示小明”
+
+网关启动后会显示 6 位电脑配对码。先用发件人账号登录网页并输入配对码，
+再开始语音写信。退出网页账号会自动解除电脑绑定；网关没有重启时，在同一
+浏览器登录另一个账号会自动把这台电脑切换到新用户。若默认端口被占用，
+脚本会自动换到可用端口，请使用终端实际显示的网址。摄像头不可用时则自动
+切换为 JPEG 上传模拟，不会中断整个演示。
 
 ```bash
-python -m app \
-  --audio-host 0.0.0.0 --audio-port 8081 \
-  --vision-host 0.0.0.0 --vision-port 8082
+cp .env.local.example .env.local
+./run-local.sh --list-mics
+./run-local.sh --input-device 2
+./run-demo.sh --camera-device 1
 ```
 
-### 使用电脑麦克风测试 LLM
-
-列出输入设备：
+仅启动 Docker 服务或改用真实 Bot 输入：
 
 ```bash
-python -m app mic-test --list-input-devices
+./run-local.sh --services-only
+./run-local.sh --bot
+./stop-local.sh
 ```
 
-使用系统默认麦克风：
+完整的功能测试话术、图片上传方法和验收点见
+[本地完整测试说明](docs/local-testing.md)。
+
+### 单进程诊断模式
+
+不启动 Docker 时，也可以直接测试单机麦克风输入：
 
 ```bash
 python -m app mic-test
-```
-
-按编号或名称选择设备：
-
-```bash
 python -m app mic-test --input-device 2
-python -m app mic-test --input-device "MacBook Microphone"
 ```
 
 `mic-test` 只启用音频链路，不监听 Bot 音频端口，也不启动视觉输入。按
@@ -209,15 +220,15 @@ LLM 问答流程：
 
 写信完成后，系统会自动：
 
-1. 将 LLM 正文排版成 384 点宽的黑白信笺；
-2. 在左上角显示收件人，在右上角添加随机像素邮票和日期邮戳；
-3. 在正文末尾显示 `llm.user_nickname` 作为署名；
-4. 将 PNG 预览保存到 `generated_letters/`；
-5. 使用独立的清晰文字打印通道发送到热敏打印机。
+1. 使用写信开始时绑定的网页用户作为发件人；
+2. 将正文保存到网页信件空间；
+3. 将 LLM 正文排版成 384 点宽的黑白信笺；
+4. 添加收件人、像素邮票、日期邮戳和用户署名；
+5. 将 PNG 预览保存到 `generated_letters/`。
 
-可在 `config/app.yaml` 的 `letter` 部分关闭自动打印、固定邮票主题、
-隐藏署名或设置 Linux 上的中文字体路径。信件打印不会使用照片的像素化和
-抖动参数。
+本地完整运行时信件自动打印默认开启；如只需生成预览，可设置
+`letter.auto_print: false`。
+还可以在 `letter` 配置中固定邮票主题、隐藏署名或设置 Linux 中文字体路径。
 
 取消写信：
 
@@ -228,26 +239,17 @@ LLM 问答流程：
 LLM 会话控制短语要求单独说出。若 ASR 把多句话合并为一个长句，请降低环境噪声、
 靠近麦克风，或调整 `config/app.yaml` 中的 VAD 阈值和最大语句时长。
 
-项目还保留一套不调用内置 LLM 的普通聊天事件：
-
-- `进入聊天模式`、`开始聊天`、`智能问答`：产生 `command.chat.start`；
-- `退出聊天模式`、`结束聊天`、`返回普通模式`：产生
-  `command.chat.stop`。
-
-普通聊天事件需要外部聊天程序消费；它与 `进入问答模式` 启动的内置 LLM 会话
-不同。
-
 ## Bot 输入协议
 
 音频：
 
-- TCP `0.0.0.0:8081`
+- TCP `0.0.0.0:8080`
 - 16 kHz、单声道、signed 16-bit little-endian PCM
 - 每个 VAD 帧 512 samples
 
 图像：
 
-- HTTP `POST http://0.0.0.0:8082/upload`
+- HTTP `POST http://0.0.0.0:8081/upload`
 - `Content-Type: image/jpeg`
 - 默认尺寸 640 × 480
 - 默认最大 2 MiB
@@ -278,21 +280,22 @@ npm run dev
 `integrations/ai-hub-os-web/data/letters.sqlite`。
 
 App 完成语音写信后，会将信件同步到网页数据库。发件人和收件人须先注册；
-启动 App 前，将 `AI_HUB_SENDER_EMAIL` 设置为发件人的注册邮箱，并让
-`AI_HUB_BRIDGE_TOKEN` 与网页端使用相同值。同一封信只保存一条记录，但会同时
-出现在发件人的“已发送”和收件人的“收件”空间。完整配置和接口说明参见
+本地网关启动后显示 6 位配对码，发件人登录网页并绑定当前电脑。
+`AI_HUB_BRIDGE_TOKEN` 需要在 Cloud 与网页端使用相同值。同一封信只保存一条
+记录，但会同时出现在发件人的“已发送”和收件人的“收件”空间。写信会话开始时
+会锁定用户，过程中切换账号不会改变这封信的归属。完整配置和接口说明参见
 `integrations/ai-hub-os-web/README.md`。
 
 当前端口分配：
 
-- `8081`：Bot 麦克风 TCP PCM；
-- `8082`：Bot 图像 HTTP 上传；
+- `8080`：Bot 麦克风 TCP PCM；
+- `8081`：Bot 图像 HTTP 上传；
 - `8090`：Desktop Bot HTTP/WebSocket API；
 - `18000`：AI Hub OS Web。
 
 ## API
 
-默认 API 地址为 `http://127.0.0.1:8090`：
+本地模拟时 API 地址为 `http://127.0.0.1:8090`：
 
 ```text
 GET  /api/health
@@ -361,6 +364,8 @@ app/
 └── vision/       图像解码、手势识别和稳定器
 
 config/           公开配置和私密配置模板
+compose.local.yaml 本地网页、数据库和 App 服务
+run-local.sh      一键启动完整本地环境
 scripts/          硬件协议诊断与 Vision 测试
 tests/            自动化测试
 models/           本地模型（不提交）

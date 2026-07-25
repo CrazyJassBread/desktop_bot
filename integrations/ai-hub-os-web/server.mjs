@@ -98,7 +98,11 @@ export function createWebServer(options = {}) {
   );
   const secureCookies = (
     options.secureCookies
-    ?? process.env.NODE_ENV === "production"
+    ?? (
+      process.env.SECURE_COOKIES
+        ? process.env.SECURE_COOKIES === "true"
+        : process.env.NODE_ENV === "production"
+    )
   );
 
   const server = createServer(async (request, response) => {
@@ -192,6 +196,10 @@ export function createWebServer(options = {}) {
       }
 
       if (request.method === "POST" && path === "/api/v1/auth/logout") {
+        const { user } = requestSession(request, database);
+        if (user) {
+          database.unbindGatewaysForUser(user.id, new Date().toISOString());
+        }
         deleteRequestSession(request, database);
         return sendJson(
           response,
@@ -224,6 +232,344 @@ export function createWebServer(options = {}) {
         });
       }
 
+      if (request.method === "POST" && path === "/api/v1/letters") {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        const body = await readJson(request);
+        const recipientUserId = cleanText(body.recipientUserId, 128);
+        const recipient = database.findUserById(recipientUserId);
+        if (!recipient) {
+          return problem(response, 404, "RECIPIENT_NOT_FOUND", "收件人不存在");
+        }
+        if (!database.areFriends(user.id, recipient.id)) {
+          return problem(
+            response,
+            403,
+            "PENPAL_REQUIRED",
+            "添加对方为笔友后才能寄信"
+          );
+        }
+        const subject = cleanText(body.subject, 120);
+        const content = cleanText(body.content, 20_000);
+        if (!subject || !content) {
+          return problem(
+            response,
+            422,
+            "LETTER_FIELDS_REQUIRED",
+            "请填写主题和正文"
+          );
+        }
+        const result = database.saveLetter({
+          id: randomUUID(),
+          senderUserId: user.id,
+          recipientUserId: recipient.id,
+          subject,
+          content,
+          source: "web",
+          sourceEventId: null,
+          createdAt: new Date().toISOString()
+        });
+        const draftId = cleanText(body.draftId, 128);
+        if (draftId) database.deleteDraft(draftId, user.id);
+        return sendJson(response, 201, result);
+      }
+
+      if (request.method === "GET" && path === "/api/v1/friends") {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        return sendJson(response, 200, database.listFriendships(user.id));
+      }
+
+      if (request.method === "POST" && path === "/api/v1/friends/request") {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        const body = await readJson(request);
+        const email = normalizeEmail(body.email);
+        const addressee = database.findUserByEmail(email);
+        if (!addressee) {
+          return problem(
+            response,
+            404,
+            "USER_NOT_FOUND",
+            "没有找到使用该邮箱的用户"
+          );
+        }
+        if (addressee.id === user.id) {
+          return problem(
+            response,
+            422,
+            "SELF_FRIENDSHIP",
+            "不能添加自己为笔友"
+          );
+        }
+        const friendships = database.requestFriendship(
+          user.id,
+          addressee.id,
+          new Date().toISOString()
+        );
+        return sendJson(response, 200, friendships);
+      }
+
+      if (
+        request.method === "POST"
+        && path.startsWith("/api/v1/friends/")
+        && path.endsWith("/accept")
+      ) {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        const requesterUserId = cleanText(
+          decodeURIComponent(
+            path.slice("/api/v1/friends/".length, -"/accept".length)
+          ),
+          128
+        );
+        if (!database.acceptFriendship(
+          user.id,
+          requesterUserId,
+          new Date().toISOString()
+        )) {
+          return problem(
+            response,
+            404,
+            "FRIEND_REQUEST_NOT_FOUND",
+            "笔友申请不存在或已处理"
+          );
+        }
+        return sendJson(
+          response,
+          200,
+          database.listFriendships(user.id)
+        );
+      }
+
+      if (request.method === "GET" && path === "/api/v1/drafts") {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        return sendJson(response, 200, {
+          drafts: database.listDrafts(user.id)
+        });
+      }
+
+      if (request.method === "POST" && path === "/api/v1/drafts") {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        const body = await readJson(request);
+        const recipientUserId = cleanText(body.recipientUserId, 128) || null;
+        if (
+          recipientUserId
+          && !database.areFriends(user.id, recipientUserId)
+        ) {
+          return problem(
+            response,
+            403,
+            "PENPAL_REQUIRED",
+            "草稿收件人必须是你的笔友"
+          );
+        }
+        const now = new Date().toISOString();
+        const draft = database.saveDraft({
+          id: randomUUID(),
+          ownerUserId: user.id,
+          recipientUserId,
+          subject: cleanText(body.subject, 120),
+          content: cleanText(body.content, 20_000),
+          createdAt: now,
+          updatedAt: now
+        });
+        return sendJson(response, 201, { draft });
+      }
+
+      if (path.startsWith("/api/v1/drafts/")) {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        const draftId = cleanText(
+          decodeURIComponent(path.slice("/api/v1/drafts/".length)),
+          128
+        );
+        if (request.method === "PUT") {
+          const existing = database.findDraft(draftId, user.id);
+          if (!existing) {
+            return problem(response, 404, "DRAFT_NOT_FOUND", "草稿不存在");
+          }
+          const body = await readJson(request);
+          const recipientUserId = cleanText(body.recipientUserId, 128) || null;
+          if (
+            recipientUserId
+            && !database.areFriends(user.id, recipientUserId)
+          ) {
+            return problem(
+              response,
+              403,
+              "PENPAL_REQUIRED",
+              "草稿收件人必须是你的笔友"
+            );
+          }
+          const draft = database.saveDraft({
+            id: draftId,
+            ownerUserId: user.id,
+            recipientUserId,
+            subject: cleanText(body.subject, 120),
+            content: cleanText(body.content, 20_000),
+            createdAt: existing.createdAt,
+            updatedAt: new Date().toISOString()
+          });
+          return sendJson(response, 200, { draft });
+        }
+        if (request.method === "DELETE") {
+          if (!database.deleteDraft(draftId, user.id)) {
+            return problem(response, 404, "DRAFT_NOT_FOUND", "草稿不存在");
+          }
+          return sendJson(response, 200, { status: "deleted" });
+        }
+      }
+
+      if (request.method === "GET" && path === "/api/v1/gateways") {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        return sendJson(response, 200, {
+          gateways: database.gatewaysForUser(user.id)
+        });
+      }
+
+      if (request.method === "POST" && path === "/api/v1/gateways/bind") {
+        const { user } = requestSession(request, database);
+        if (!user) {
+          return problem(response, 401, "AUTH_REQUIRED", "请先登录");
+        }
+        const body = await readJson(request);
+        const pairingCode = cleanText(body.pairingCode, 6);
+        if (!/^\d{6}$/.test(pairingCode)) {
+          return problem(
+            response,
+            422,
+            "PAIRING_CODE_INVALID",
+            "请输入网关显示的 6 位配对码"
+          );
+        }
+        let gateway;
+        try {
+          gateway = database.bindGateway(
+            pairingCode,
+            user.id,
+            new Date().toISOString()
+          );
+        } catch (error) {
+          if (error.code === "GATEWAY_OFFLINE") {
+            return problem(
+              response,
+              409,
+              error.code,
+              "这台电脑当前不在线，请先启动本地网关"
+            );
+          }
+          throw error;
+        }
+        if (!gateway) {
+          return problem(
+            response,
+            404,
+            "PAIRING_CODE_NOT_FOUND",
+            "配对码不存在或已经更新"
+          );
+        }
+        return sendJson(response, 200, { gateway });
+      }
+
+      if (
+        request.method === "POST"
+        && path === "/api/v1/app/gateways/presence"
+      ) {
+        const authorization = String(request.headers.authorization ?? "");
+        const suppliedToken = authorization.startsWith("Bearer ")
+          ? authorization.slice(7)
+          : "";
+        if (!safeTokenMatches(suppliedToken, bridgeToken)) {
+          return problem(
+            response,
+            401,
+            "BRIDGE_UNAUTHORIZED",
+            "App 同步凭据无效"
+          );
+        }
+        const body = await readJson(request);
+        const gatewayId = cleanText(body.gatewayId, 128);
+        const pairingCode = cleanText(body.pairingCode, 6);
+        const connected = body.connected === true;
+        if (!gatewayId || !/^\d{6}$/.test(pairingCode)) {
+          return problem(
+            response,
+            422,
+            "GATEWAY_IDENTITY_INVALID",
+            "网关身份或配对码无效"
+          );
+        }
+        const gateway = database.registerGateway({
+          gatewayId,
+          pairingCode,
+          connected,
+          updatedAt: new Date().toISOString()
+        });
+        return sendJson(response, 200, { gateway });
+      }
+
+      if (
+        request.method === "GET"
+        && path.startsWith("/api/v1/app/gateways/")
+        && path.endsWith("/owner")
+      ) {
+        const authorization = String(request.headers.authorization ?? "");
+        const suppliedToken = authorization.startsWith("Bearer ")
+          ? authorization.slice(7)
+          : "";
+        if (!safeTokenMatches(suppliedToken, bridgeToken)) {
+          return problem(
+            response,
+            401,
+            "BRIDGE_UNAUTHORIZED",
+            "App 同步凭据无效"
+          );
+        }
+        const encodedGatewayId = path.slice(
+          "/api/v1/app/gateways/".length,
+          -"/owner".length
+        );
+        const gatewayId = cleanText(decodeURIComponent(encodedGatewayId), 128);
+        const gateway = database.gatewayById(gatewayId);
+        if (!gateway || !gateway.connected) {
+          return problem(
+            response,
+            404,
+            "GATEWAY_OFFLINE",
+            "电脑网关当前未连接"
+          );
+        }
+        if (!gateway.user) {
+          return problem(
+            response,
+            404,
+            "GATEWAY_NOT_BOUND",
+            "请先在网页绑定这台电脑"
+          );
+        }
+        return sendJson(response, 200, { user: gateway.user });
+      }
+
       if (
         request.method === "POST"
         && path === "/api/v1/app/voice-letters"
@@ -241,8 +587,8 @@ export function createWebServer(options = {}) {
           );
         }
         const body = await readJson(request);
-        const sender = database.findUserByEmail(
-          normalizeEmail(body.senderEmail)
+        const sender = database.findUserById(
+          cleanText(body.senderUserId, 128)
         );
         if (!sender) {
           return problem(

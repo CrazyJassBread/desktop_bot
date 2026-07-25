@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,12 @@ class ASRConfig:
     device: str = "cpu"
     compute_type: str = "int8"
     language: str = "zh"
+    base_url: str = ""
+    endpoint: str = "/audio/transcriptions"
+    base_url_env: str = "AI_BOT_ASR_BASE_URL"
+    api_key_env: str = "AI_BOT_ASR_API_KEY"
+    model_env: str = "AI_BOT_ASR_MODEL"
+    timeout_seconds: float = 60.0
     mock_transcripts: dict[str, str] = field(default_factory=dict)
 
 
@@ -36,12 +43,12 @@ class ASRConfig:
 class HardwareConfig:
     audio_enabled: bool = True
     audio_host: str = "0.0.0.0"
-    audio_port: int = 8081
+    audio_port: int = 8080
     audio_frame_samples: int = 512
     audio_queue_size: int = 256
     vision_enabled: bool = True
     vision_host: str = "0.0.0.0"
-    vision_port: int = 8082
+    vision_port: int = 8081
     vision_upload_path: str = "/upload"
     session_id: str = "bot"
 
@@ -57,22 +64,12 @@ class VADConfig:
     min_silence_duration_ms: int = 800
     pre_roll_ms: int = 200
     max_utterance_seconds: float = 45.0
+    energy_noise_floor: float = 0.012
+    energy_speech_level: float = 0.045
 
 
 @dataclass
 class KeywordConfig:
-    wake: list[str] = field(
-        default_factory=lambda: ["小A", "小爱", "小诶"]
-    )
-    enter_chat: list[str] = field(
-        default_factory=lambda: ["进入聊天模式", "开始聊天", "智能问答"]
-    )
-    exit_chat: list[str] = field(
-        default_factory=lambda: ["退出聊天模式", "结束聊天", "返回普通模式"]
-    )
-    write_letter: list[str] = field(
-        default_factory=lambda: ["帮我写信", "我要写一封信"]
-    )
     photo_print: list[str] = field(
         default_factory=lambda: [
             "拍照",
@@ -84,7 +81,6 @@ class KeywordConfig:
             "take a picture",
         ]
     )
-    custom: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -114,7 +110,6 @@ class VisionConfig:
 
 @dataclass
 class ApplicationConfig:
-    default_language: str = "zh"
     photo_enabled: bool = True
     photo_delay_seconds: float = 1.0
     photo_frame_max_age_seconds: float = 1.0
@@ -161,7 +156,6 @@ class WebLetterSyncConfig:
     enabled: bool = False
     base_url: str = "http://127.0.0.1:18000"
     endpoint: str = "/api/v1/app/voice-letters"
-    sender_email_env: str = "AI_HUB_SENDER_EMAIL"
     bridge_token_env: str = "AI_HUB_BRIDGE_TOKEN"
     timeout_seconds: float = 10.0
 
@@ -212,7 +206,12 @@ def _letter_mode_defaults() -> "LLMModeConfig":
 def _qa_mode_defaults() -> "LLMModeConfig":
     return LLMModeConfig(
         start_phrases=["进入问答模式", "我有一个问题", "帮我回答"],
-        finish_phrases=["小A，请回答", "小A，问题说完了"],
+        finish_phrases=[
+            "小A，请回答",
+            "小A，问题说完了",
+            "请回答",
+            "问题说完了",
+        ],
         cancel_phrases=["小A，取消问答", "小A，不要回答了"],
     )
 
@@ -559,31 +558,33 @@ def _validate(config: AppConfig) -> None:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ConfigurationError(f"{name} must be a non-negative integer")
     _positive(config.vad.max_utterance_seconds, "vad.max_utterance_seconds")
+    if not (
+        0
+        <= config.vad.energy_noise_floor
+        < config.vad.energy_speech_level
+        <= 1
+    ):
+        raise ConfigurationError(
+            "vad energy levels must satisfy 0 <= noise < speech <= 1"
+        )
+    if config.asr.backend == "openai_http":
+        if not config.asr.endpoint.startswith("/"):
+            raise ConfigurationError("asr.endpoint must start with '/'")
+        for name, value in (
+            ("asr.base_url_env", config.asr.base_url_env),
+            ("asr.api_key_env", config.asr.api_key_env),
+            ("asr.model_env", config.asr.model_env),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError(f"{name} cannot be empty")
+        _positive(config.asr.timeout_seconds, "asr.timeout_seconds")
     for name, phrases in (
-        ("keywords.wake", config.keywords.wake),
-        ("keywords.enter_chat", config.keywords.enter_chat),
-        ("keywords.exit_chat", config.keywords.exit_chat),
-        ("keywords.write_letter", config.keywords.write_letter),
         ("keywords.photo_print", config.keywords.photo_print),
     ):
         if not isinstance(phrases, list) or not all(
             isinstance(item, str) and item.strip() for item in phrases
         ):
             raise ConfigurationError(f"{name} must contain non-empty strings")
-    if not isinstance(config.keywords.custom, dict):
-        raise ConfigurationError("keywords.custom must be a mapping")
-    for command_type, phrases in config.keywords.custom.items():
-        if (
-            not isinstance(command_type, str)
-            or not command_type.strip()
-            or not isinstance(phrases, list)
-            or not all(
-                isinstance(item, str) and item.strip() for item in phrases
-            )
-        ):
-            raise ConfigurationError(
-                "keywords.custom must map command names to phrase lists"
-            )
     for name, value in (
         ("vision.image_width", config.vision.image_width),
         ("vision.image_height", config.vision.image_height),
@@ -602,10 +603,6 @@ def _validate(config: AppConfig) -> None:
         raise ConfigurationError("invalid vision mode temporal filter")
     if config.vision.gesture_required_hits > config.vision.gesture_window_size:
         raise ConfigurationError("invalid vision gesture temporal filter")
-    if config.application.default_language not in {"zh", "en"}:
-        raise ConfigurationError(
-            "application.default_language must be 'zh' or 'en'"
-        )
     _positive(
         config.application.photo_delay_seconds,
         "application.photo_delay_seconds",
@@ -694,10 +691,6 @@ def _validate(config: AppConfig) -> None:
             "web_letter_sync.endpoint must start with '/'"
         )
     for name, value in (
-        (
-            "web_letter_sync.sender_email_env",
-            config.web_letter_sync.sender_email_env,
-        ),
         (
             "web_letter_sync.bridge_token_env",
             config.web_letter_sync.bridge_token_env,
@@ -828,5 +821,12 @@ def load_config(
         )
         if provider_path is not None:
             config.llm.provider = _load_llm_provider(provider_path)
+        env_provider = {
+            "base_url": os.environ.get("AI_BOT_LLM_BASE_URL", "").strip(),
+            "model": os.environ.get("AI_BOT_LLM_MODEL", "").strip(),
+            "api_key": os.environ.get("AI_BOT_LLM_API_KEY", "").strip(),
+        }
+        if all(env_provider.values()):
+            config.llm.provider = LLMProviderConfig(**env_provider)
     _validate(config)
     return config

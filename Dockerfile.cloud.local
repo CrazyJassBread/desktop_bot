@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8080
+
+WORKDIR /app
+
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-cloud.txt .
+RUN pip install --no-cache-dir -r requirements-cloud.txt
+RUN pip uninstall -y opencv-contrib-python \
+    && pip install --no-cache-dir --force-reinstall --no-deps \
+      "opencv-python-headless>=4.10,<5"
+
+COPY app ./app
+COPY config ./config
+RUN mkdir -p /data/models /data/photos /data/letters /data/logs
+
+EXPOSE 8080
+CMD ["python", "-m", "app.cloud_main"]

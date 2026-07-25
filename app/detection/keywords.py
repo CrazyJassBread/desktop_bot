@@ -42,43 +42,22 @@ class KeywordMatch:
 
 
 class KeywordDetector:
-    """Match feature phrases first and use wake words as the fallback."""
+    """Detect the optional voice shortcut for photo printing."""
 
     def __init__(self, config: KeywordConfig) -> None:
-        self._wake_phrases = tuple(
-            normalize_text(item) for item in config.wake
-        )
-        self._rules = (
-            ("mode.enter_chat", config.enter_chat),
-            ("mode.exit_chat", config.exit_chat),
-            ("feature.photo_print", config.photo_print),
-            ("feature.write_letter", config.write_letter),
-            *(
-                (f"intent.{command_type}", phrases)
-                for command_type, phrases in config.custom.items()
-            ),
-            ("wake", config.wake),
-        )
+        self._phrases = tuple(config.photo_print)
 
     def detect(self, transcript: str) -> KeywordMatch | None:
         normalized = normalize_text(transcript)
         if not normalized:
             return None
-        for event_type, phrases in self._rules:
-            for phrase in phrases:
-                keyword = normalize_text(phrase)
-                if keyword and keyword in normalized:
-                    payload = _remove_normalized_once(transcript, phrase)
-                    if event_type != "wake":
-                        for wake_phrase in self._wake_phrases:
-                            payload = _remove_normalized_once(
-                                payload,
-                                wake_phrase,
-                            )
-                    return KeywordMatch(
-                        event_type=event_type,
-                        keyword=phrase,
-                        transcript=transcript.strip(),
-                        payload_text=payload,
-                    )
+        for phrase in self._phrases:
+            keyword = normalize_text(phrase)
+            if keyword and keyword in normalized:
+                return KeywordMatch(
+                    event_type="feature.photo_print",
+                    keyword=phrase,
+                    transcript=transcript.strip(),
+                    payload_text=_remove_normalized_once(transcript, phrase),
+                )
         return None
