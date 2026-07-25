@@ -148,6 +148,15 @@ class PrinterConfig:
 
 
 @dataclass
+class BotExpressionConfig:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1"
+    endpoint: str = "/oled/expression"
+    timeout_seconds: float = 5.0
+    action_duration_seconds: float = 2.0
+
+
+@dataclass
 class LetterConfig:
     enabled: bool = True
     auto_print: bool = True
@@ -259,6 +268,9 @@ class AppConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     application: ApplicationConfig = field(default_factory=ApplicationConfig)
     printer: PrinterConfig = field(default_factory=PrinterConfig)
+    bot_expression: BotExpressionConfig = field(
+        default_factory=BotExpressionConfig
+    )
     letter: LetterConfig = field(default_factory=LetterConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     api: APIConfig = field(default_factory=APIConfig)
@@ -274,6 +286,7 @@ _SECTIONS: dict[str, type[Any]] = {
     "vision": VisionConfig,
     "application": ApplicationConfig,
     "printer": PrinterConfig,
+    "bot_expression": BotExpressionConfig,
     "letter": LetterConfig,
     "api": APIConfig,
 }
@@ -628,6 +641,28 @@ def _validate(config: AppConfig) -> None:
     ):
         if not isinstance(value, bool):
             raise ConfigurationError(f"{name} must be a boolean")
+    if not isinstance(config.bot_expression.enabled, bool):
+        raise ConfigurationError("bot_expression.enabled must be a boolean")
+    if (
+        not isinstance(config.bot_expression.base_url, str)
+        or not config.bot_expression.base_url.strip()
+    ):
+        raise ConfigurationError("bot_expression.base_url cannot be empty")
+    if (
+        not isinstance(config.bot_expression.endpoint, str)
+        or not config.bot_expression.endpoint.startswith("/")
+    ):
+        raise ConfigurationError(
+            "bot_expression.endpoint must start with '/'"
+        )
+    _positive(
+        config.bot_expression.timeout_seconds,
+        "bot_expression.timeout_seconds",
+    )
+    _positive(
+        config.bot_expression.action_duration_seconds,
+        "bot_expression.action_duration_seconds",
+    )
     for name, value in (
         ("letter.enabled", config.letter.enabled),
         ("letter.auto_print", config.letter.auto_print),

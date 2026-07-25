@@ -231,6 +231,28 @@ async def test_qa_session_uses_nickname_and_answer_prompt():
 
 
 @pytest.mark.asyncio
+async def test_generation_start_is_emitted_before_completion():
+    manager = LLMSessionManager(
+        manager_config(),
+        RecordingLLMClient("回答"),
+        logger=logging.getLogger("test.llm.generation_state"),
+    )
+    emitted: list[PerceptionEvent] = []
+
+    async def emit(event: PerceptionEvent) -> None:
+        emitted.append(event)
+
+    manager.set_event_emitter(emit)
+    await manager.handle(start_event("llm.qa.start"))
+    await manager.handle(transcript("问题"))
+    completed = await manager.handle(transcript("小A，请回答"))
+
+    assert event_types(tuple(emitted)) == ["llm.generation_started"]
+    assert event_types(completed) == ["llm.answer_completed"]
+    await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_session_rejects_content_over_character_limit():
     config = manager_config()
     config.session.max_characters = 4

@@ -83,6 +83,17 @@ class LLMSessionManager:
                 return ()
             events, generation = self._transcript_locked(event)
         if generation is not None:
+            await self._publish(
+                PerceptionEvent(
+                    event_type="llm.generation_started",
+                    source="llm",
+                    session_id=generation.runtime_session_id,
+                    payload={
+                        "llm_session_id": generation.session_id,
+                        "mode": generation.mode,
+                    },
+                )
+            )
             return await self._generate(generation)
         return events
 

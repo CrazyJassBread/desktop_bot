@@ -107,6 +107,16 @@ printer:
   timeout_seconds: 30
   cooldown_seconds: 2.0
 
+# OLED expression endpoint on the Bot ESP.
+# Persistent expressions: happy, angry, tired, default.
+# Two-second actions: blink, laugh, confused.
+bot_expression:
+  enabled: true
+  base_url: http://10.76.11.223
+  endpoint: /oled/expression
+  timeout_seconds: 5
+  action_duration_seconds: 2
+
 # Slowly-inspired monochrome letter layout. Completed LLM letters are rendered
 # to a PNG preview and sent through the crisp text-printing path.
 letter:

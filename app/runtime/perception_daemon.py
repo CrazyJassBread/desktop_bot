@@ -52,6 +52,7 @@ class PerceptionDaemon:
         event_bus: EventBus | None = None,
         application_controller: object | None = None,
         latest_frame_store: LatestFrameStore | None = None,
+        expression_controller: object | None = None,
     ) -> None:
         audio_parts = (audio_source, audio_segmenter, audio_processor)
         if any(item is not None for item in audio_parts) and not all(
@@ -71,6 +72,7 @@ class PerceptionDaemon:
         self.event_bus = event_bus or EventBus()
         self.application_controller = application_controller
         self.latest_frame_store = latest_frame_store
+        self.expression_controller = expression_controller
         self._utterances: asyncio.Queue[AudioData | object] = asyncio.Queue(
             maxsize=utterance_queue_size
         )
@@ -86,6 +88,8 @@ class PerceptionDaemon:
     async def run(self) -> None:
         self.running = True
         try:
+            if self.expression_controller is not None:
+                await getattr(self.expression_controller, "start")()
             async with asyncio.TaskGroup() as tasks:
                 if self.audio_source is not None:
                     tasks.create_task(self._segment_audio())
@@ -94,6 +98,8 @@ class PerceptionDaemon:
                     tasks.create_task(self._process_vision())
         finally:
             self.running = False
+            if self.expression_controller is not None:
+                await getattr(self.expression_controller, "aclose")()
 
     async def _segment_audio(self) -> None:
         assert self.audio_source is not None
@@ -119,12 +125,30 @@ class PerceptionDaemon:
                     return
                 assert isinstance(item, AudioData)
                 self.metrics.asr_calls += 1
+                await self._update_expression(
+                    PerceptionEvent(
+                        "runtime.asr_started",
+                        "runtime",
+                    )
+                )
                 try:
                     events = await self.audio_processor.process(item)
                 except ASRError:
                     self.metrics.asr_errors += 1
                     LOGGER.exception("ASR failed; continuing with the next utterance")
+                    await self._update_expression(
+                        PerceptionEvent(
+                            "runtime.asr_failed",
+                            "runtime",
+                        )
+                    )
                     continue
+                await self._update_expression(
+                    PerceptionEvent(
+                        "runtime.asr_completed",
+                        "runtime",
+                    )
+                )
                 for event in events:
                     if event.event_type == "speech.transcribed":
                         self.metrics.speech_transcripts += 1
@@ -153,11 +177,17 @@ class PerceptionDaemon:
 
     async def emit(self, event: PerceptionEvent) -> None:
         event = self._record(event)
+        await self._update_expression(event)
         if self.application_controller is None:
             return
         derived = await getattr(self.application_controller, "handle")(event)
         for derived_event in derived:
-            self._record(derived_event)
+            derived_event = self._record(derived_event)
+            await self._update_expression(derived_event)
+
+    async def _update_expression(self, event: PerceptionEvent) -> None:
+        if self.expression_controller is not None:
+            await getattr(self.expression_controller, "handle")(event)
 
     def _record(self, event: PerceptionEvent) -> PerceptionEvent:
         self._event_sequence += 1

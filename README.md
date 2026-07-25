@@ -13,6 +13,7 @@ Desktop Bot 是一个面向桌面机器人硬件的持续感知与交互服务�
   像素邮票、日期邮戳和用户署名，并自动使用热敏打印机输出。
 - 视觉：接收 Bot 上传的 JPEG，使用 MediaPipe 识别稳定手势。
 - 照片：语音或 `Victory` 手势触发延迟拍照、图像处理和热敏打印。
+- 表情：把监听、生成、打印、完成和失败状态转换为 Bot OLED 表情。
 - API：提供健康状态、应用状态、事件历史、WebSocket 事件流和照片访问。
 - 日志：感知事件与 LLM 会话分别写入独立日志。
 
@@ -70,6 +71,7 @@ models/gesture_recognizer.task
 - `keywords`：唤醒词、聊天、拍照和自定义命令；
 - `llm`：LLM 开关、会话限制和语音控制短语；
 - `application`、`printer`：照片处理和打印；
+- `bot_expression`：Bot ESP 地址、表情接口和短动作时长；
 - `letter`：信件预览、字体、像素邮票、邮戳和自动打印；
 - `api`：HTTP/WebSocket 服务。
 
@@ -97,6 +99,31 @@ llm:
 ```
 
 `config/llm.yaml` 已被 Git 忽略。不要把 API key 写入公开配置、代码或日志。
+
+### 配置 Bot 表情
+
+Bot 表情通过 `POST /oled/expression` 发送。修改 ESP 地址：
+
+```yaml
+bot_expression:
+  enabled: true
+  base_url: http://10.76.11.223
+  endpoint: /oled/expression
+  timeout_seconds: 5
+  action_duration_seconds: 2
+```
+
+`happy`、`angry`、`tired`、`default` 用于持续状态；`blink`、`laugh`、
+`confused` 是短动作，播放结束后会恢复到当时的持续状态。网络发送失败只记录
+日志，不会中断语音、视觉或打印流程。
+
+默认状态转换：
+
+- 唤醒、进入会话、触发拍照：`blink`，随后保持 `happy`；
+- ASR、LLM 生成、照片处理、信件渲染或打印：保持 `tired`；
+- 问答、照片或信件成功完成：`laugh`，随后恢复 `default`；
+- ASR、LLM、照片或打印失败：`confused`，随后保持 `angry`；
+- 退出或取消会话：恢复 `default`。
 
 ## 运行方式
 

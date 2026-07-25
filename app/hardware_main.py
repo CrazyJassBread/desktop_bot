@@ -23,6 +23,7 @@ from app.factories import (
     setup_logging,
 )
 from app.features.photo_capture import LatestFrameStore, PhotoCaptureManager
+from app.features.bot_expression import BotExpressionController
 from app.features.letter_print import LetterPrintManager
 from app.features.letter_rendering import LetterRenderer
 from app.features.thermal_printer import ThermalPrinterClient
@@ -161,6 +162,12 @@ def build_daemon(
     llm_detector = None
     llm_session_manager = None
     printer = None
+    expression_controller = None
+
+    if config.bot_expression.enabled:
+        expression_controller = BotExpressionController(
+            config.bot_expression
+        )
 
     if config.printer.enabled:
         printer = ThermalPrinterClient(
@@ -286,6 +293,7 @@ def build_daemon(
         event_bus=event_bus,
         application_controller=controller,
         latest_frame_store=latest_frame_store,
+        expression_controller=expression_controller,
     )
     return daemon, gesture_backend
 
