@@ -26,6 +26,7 @@
 #include "printer.h"
 #include "web_server.h"
 #include "roboeyes_display.h"
+#include "server_config.h"
 
 #include "lwip/err.h"
 #include "lwip/sys.h"
@@ -224,6 +225,8 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(3000));
 
     roboeyes_laugh();
+
+    ESP_ERROR_CHECK(server_config_init());
 
     // webserver
     httpd_handle_t server =

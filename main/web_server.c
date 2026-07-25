@@ -1,6 +1,7 @@
 #include "web_server.h"
 #include "printer_http.h"
 #include "oled_http.h"
+#include "server_http.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -134,6 +135,18 @@ httpd_handle_t web_server_start(void)
         return NULL;
     }
 
+    result = server_http_register_handlers(server);
+
+    if (result != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Could not register server handlers: %s",
+            esp_err_to_name(result)
+        );
+
+        httpd_stop(server);
+        return NULL;
+    }
 
     ESP_LOGI(
         TAG,

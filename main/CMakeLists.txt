@@ -10,6 +10,8 @@ idf_component_register(
         "web_server.c"
         "roboeyes_display.cpp"
         "oled_http.c"
+        "server_config.c"
+        "server_http.c"
 
     INCLUDE_DIRS "."
 
@@ -31,4 +33,5 @@ idf_component_register(
         esp-tls
         mbedtls
         roboeyes
+        lwip
 )
