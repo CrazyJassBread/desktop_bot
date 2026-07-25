@@ -17,6 +17,7 @@ dist/
 integrations/**/node_modules/
 integrations/**/.env
 integrations/**/.env.local
+integrations/**/data/
 api.txt
 records/
 received_images/

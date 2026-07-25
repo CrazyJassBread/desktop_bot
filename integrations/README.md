@@ -1,19 +1,15 @@
 # Integrations
 
-This directory contains companion applications that consume the `desktop_bot`
-perception API instead of running on the ESP32 firmware itself.
+此目录包含与桌面 Bot 配套、但不运行在 ESP32 固件中的应用。
 
 ## `ai-hub-os-web`
 
-An MVP Web + API app for AI Hub OS:
+精简的用户信件空间，提供：
 
-- browser/local microphone voice commands;
-- DeepSeek intent routing through server-side environment variables;
-- AI Letter drafting and voice-send flow;
-- 384 px thermal letter/content rendering;
-- ESP32 printer dispatch;
-- `desktop_bot` WebSocket bridge for board microphone events.
+- 用户注册、登录和安全会话；
+- SQLite 用户与信件持久化；
+- 当前用户的收件箱和已发送信件；
+- App 语音写信完成后的双向信箱同步。
 
-The hardware runtime remains at the repository root. The Web app is intentionally
-kept in this integration directory so hardware perception code and product UI code
-can evolve independently.
+硬件与语音运行时仍保留在仓库根目录。网页端只管理账号与信件，不再承载社区、
+匹配、照片、浏览器语音、设备控制或打印功能。

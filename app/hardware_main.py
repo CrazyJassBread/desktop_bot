@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 from pathlib import Path
 
 from app.audio.keyword_asr import KeywordASRProcessor
@@ -27,6 +28,7 @@ from app.features.bot_expression import BotExpressionController
 from app.features.letter_print import LetterPrintManager
 from app.features.letter_rendering import LetterRenderer
 from app.features.thermal_printer import ThermalPrinterClient
+from app.features.web_letter_sync import WebLetterSyncManager
 from app.llm.client import OpenAICompatibleClient
 from app.llm.mode_detector import LLMModeDetector
 from app.llm.session import LLMSessionManager
@@ -159,6 +161,7 @@ def build_daemon(
     latest_frame_store = LatestFrameStore()
     photo_manager = None
     letter_manager = None
+    web_letter_manager = None
     llm_detector = None
     llm_session_manager = None
     printer = None
@@ -168,6 +171,28 @@ def build_daemon(
         expression_controller = BotExpressionController(
             config.bot_expression
         )
+
+    if config.web_letter_sync.enabled:
+        sender_email = os.environ.get(
+            config.web_letter_sync.sender_email_env,
+            "",
+        ).strip()
+        bridge_token = os.environ.get(
+            config.web_letter_sync.bridge_token_env,
+            "",
+        ).strip()
+        if sender_email and bridge_token:
+            web_letter_manager = WebLetterSyncManager(
+                config.web_letter_sync,
+                sender_email=sender_email,
+                bridge_token=bridge_token,
+            )
+        else:
+            LOGGER.warning(
+                "Web letter sync disabled at runtime; set %s and %s",
+                config.web_letter_sync.sender_email_env,
+                config.web_letter_sync.bridge_token_env,
+            )
 
     if config.printer.enabled:
         printer = ThermalPrinterClient(
@@ -279,6 +304,7 @@ def build_daemon(
         photo_manager=photo_manager,
         llm_session_manager=llm_session_manager,
         letter_manager=letter_manager,
+        web_letter_manager=web_letter_manager,
         llm_unavailable_reason=config.llm.unavailable_reason,
     )
 

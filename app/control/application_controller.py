@@ -30,12 +30,14 @@ class ApplicationController:
         photo_manager: object | None = None,
         llm_session_manager: object | None = None,
         letter_manager: object | None = None,
+        web_letter_manager: object | None = None,
         llm_unavailable_reason: str | None = None,
     ) -> None:
         self.state = AppState(language=default_language)
         self.photo_manager = photo_manager
         self.llm_session_manager = llm_session_manager
         self.letter_manager = letter_manager
+        self.web_letter_manager = web_letter_manager
         self.llm_unavailable_reason = llm_unavailable_reason
         self._emit: EventEmitter | None = None
 
@@ -52,6 +54,12 @@ class ApplicationController:
             set_emitter(emitter)
         if self.letter_manager is not None:
             set_emitter = getattr(self.letter_manager, "set_event_emitter")
+            set_emitter(emitter)
+        if self.web_letter_manager is not None:
+            set_emitter = getattr(
+                self.web_letter_manager,
+                "set_event_emitter",
+            )
             set_emitter(emitter)
 
     async def handle(
@@ -146,12 +154,12 @@ class ApplicationController:
         self,
         events: tuple[PerceptionEvent, ...],
     ) -> None:
-        if self.letter_manager is None:
-            return
-        schedule = getattr(self.letter_manager, "schedule")
         for item in events:
             if item.event_type == "llm.letter_completed":
-                schedule(item)
+                if self.letter_manager is not None:
+                    getattr(self.letter_manager, "schedule")(item)
+                if self.web_letter_manager is not None:
+                    getattr(self.web_letter_manager, "schedule")(item)
 
     def _start_photo_print(
         self,
@@ -306,3 +314,5 @@ class ApplicationController:
             await getattr(self.llm_session_manager, "aclose")()
         if self.letter_manager is not None:
             await getattr(self.letter_manager, "aclose")()
+        if self.web_letter_manager is not None:
+            await getattr(self.web_letter_manager, "aclose")()

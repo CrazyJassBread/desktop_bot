@@ -1,59 +1,77 @@
-# AI Hub OS Companion + Community + Letter MVP
+# AI Hub Letter Space
 
-无数据库的产品接口验证版本。学习、娱乐、生活、社区、匹配、Letter、设备和打印状态全部通过
-`/api/v1` 接口运行；服务重启后演示数据重置。
+精简后的网页端只负责四件事：
 
-## 启动
+- 用户注册与登录；
+- 使用 SQLite 持久保存用户、会话和信件；
+- 展示当前用户的全部、收件和已发送信件；
+- 接收 App 完成的语音信件，并让同一封信同时出现在发件人与收件人的信件空间。
+
+社区、匹配、浏览器语音、照片、设备管理和打印接口均已移除。
+
+## 运行
+
+需要 Node.js 22 或更高版本。
 
 ```bash
+cd integrations/ai-hub-os-web
+cp .env.example .env.local
+```
+
+编辑 `.env.local`，为 `AI_HUB_BRIDGE_TOKEN` 设置一个足够长的随机值，然后加载
+环境变量并启动服务：
+
+```bash
+set -a
+source .env.local
+set +a
 npm run dev
 ```
 
-- Web：`http://127.0.0.1:18000`
-- 学习：`http://127.0.0.1:18000/education`
-- 娱乐：`http://127.0.0.1:18000/entertainment`
-- 生活：`http://127.0.0.1:18000/life`
-- 社区：`http://127.0.0.1:18000/community`
-- 匹配：`http://127.0.0.1:18000/match`
-- Letter：`http://127.0.0.1:18000/letter`
-- 设备：`http://127.0.0.1:18000/device`
-- 设备模拟器：`http://127.0.0.1:18000/simulator.html`
-- API 健康检查：`http://127.0.0.1:18000/health`
+访问 `http://127.0.0.1:18000`。数据库默认保存在
+`data/letters.sqlite`，服务重启后数据仍然保留。
 
-## 已接入接口
+## 连接 App 语音写信
 
-- `GET /api/v1/ai/status`
-- `POST /api/v1/ai/orchestrate`
-- `POST /api/v1/ai/tutor`
-- `POST /api/v1/games/turtle-soup/answer`
-- `POST /api/v1/ai/ocr`
-- `GET /api/v1/photos`
-- `POST /api/v1/photos`
-- `POST /api/v1/photos/hardware`
-- `POST /api/v1/ai/journal/summary`
-- `POST /api/v1/ai/fortune`
-- `GET/POST /api/v1/posts`
-- `GET /api/v1/posts/:id`
-- `POST /api/v1/posts/:id/comments`
-- `POST /api/v1/posts/:id/reactions`
-- `GET /api/v1/matches`
-- `POST /api/v1/matches/:id/feedback`
-- `GET/POST /api/v1/letters`
-- `POST /api/v1/letters/:id/send`
-- `POST /api/v1/letters/voice/send`
-- `POST /api/v1/ai/letter/{generate|polish}`
-- `POST /api/v1/printer/content`
-- `POST /api/v1/printer/content/preview`
-- `POST /api/v1/printer/text`
-- `POST /api/v1/printer/letter`
-- `POST /api/v1/printer/letter/preview`
-- `GET /api/v1/devices`
-- `GET /api/v1/devices/:id/status`
-- `PUT /api/v1/devices/:id/print-policy`
-- `GET /api/v1/print-jobs`
-- `POST /api/v1/print-jobs/:id/device-status`
+先在网页注册发件人和收件人账号。启动 App 前设置：
 
-当前 Repository 为进程内存实现，API Client、状态和错误契约可在接 PostgreSQL 后保持不变。
-网页端语音只使用浏览器内置 Web Speech API；硬件侧只接收后端转发的打印任务。
-拍照动作由硬件端自己完成，完成后将 JPEG/PNG 以 multipart `image` 字段上传到
-`POST /api/v1/photos/hardware`，应用端只负责相册展示、热敏像素化和 Letter 附图打印。
+```bash
+export AI_HUB_SENDER_EMAIL="sender@example.com"
+export AI_HUB_BRIDGE_TOKEN="与网页端相同的令牌"
+```
+
+`config/app.yaml` 中的 `web_letter_sync.enabled` 已开启。App 收到
+`llm.letter_completed` 后，会把信件发送到：
+
+```text
+POST /api/v1/app/voice-letters
+Authorization: Bearer <AI_HUB_BRIDGE_TOKEN>
+```
+
+App 使用 `AI_HUB_SENDER_EMAIL` 找到发件人。语音中的收件人可以是已注册用户的
+邮箱或昵称；如果昵称重名，需要说出或传入准确邮箱。写入成功后，数据库只保存
+一条信件记录，发件人可在“已发送”查看，收件人可在“收件”查看。
+
+App 事件 ID 会作为幂等键；网络重试不会重复生成同一封信。
+
+## API
+
+```text
+GET  /health
+POST /api/v1/auth/register
+POST /api/v1/auth/login
+POST /api/v1/auth/logout
+GET  /api/v1/auth/session
+GET  /api/v1/letters?box=all|inbox|sent
+POST /api/v1/app/voice-letters
+```
+
+登录使用 HttpOnly、SameSite=Lax 会话 Cookie，密码使用随机盐和 scrypt
+派生后存储。App 写信接口独立使用共享令牌，不接受浏览器登录 Cookie 代替。
+
+## 验证
+
+```bash
+npm test
+npm run build
+```

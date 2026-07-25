@@ -1,10 +1,10 @@
 {
-  "name": "AI Hub OS Companion",
-  "short_name": "AI Hub",
-  "start_url": "/",
+  "name": "AI Hub Letter Space",
+  "short_name": "Letter Space",
+  "start_url": "/letters",
   "display": "standalone",
-  "background_color": "#f7f5ef",
-  "theme_color": "#f4f0e8",
+  "background_color": "#f4efe5",
+  "theme_color": "#f4efe5",
   "icons": [
     {
       "src": "/favicon.svg",

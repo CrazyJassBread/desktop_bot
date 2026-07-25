@@ -22,6 +22,12 @@ def test_config_defaults():
     assert config.letter.enabled is True
     assert config.letter.stamp_themes == ["flower", "moon", "envelope"]
     assert config.letter.show_signature is True
+    assert config.web_letter_sync.enabled is False
+    assert config.web_letter_sync.base_url == "http://127.0.0.1:18000"
+    assert (
+        config.web_letter_sync.endpoint
+        == "/api/v1/app/voice-letters"
+    )
     assert config.llm.enabled is False
     assert config.llm.session.idle_timeout_seconds == 120
     assert config.llm.modes.letter.finish_phrases == [
@@ -108,6 +114,25 @@ def test_config_rejects_invalid_printer_settings(tmp_path, body):
     ],
 )
 def test_config_rejects_invalid_letter_settings(tmp_path, body):
+    path = tmp_path / "app.yaml"
+    path.write_text(body, encoding="utf-8")
+
+    with pytest.raises(ConfigurationError):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "web_letter_sync:\n  enabled: sometimes\n",
+        "web_letter_sync:\n  base_url: ''\n",
+        "web_letter_sync:\n  endpoint: api/v1/app/voice-letters\n",
+        "web_letter_sync:\n  sender_email_env: ''\n",
+        "web_letter_sync:\n  bridge_token_env: ''\n",
+        "web_letter_sync:\n  timeout_seconds: 0\n",
+    ],
+)
+def test_config_rejects_invalid_web_letter_sync_settings(tmp_path, body):
     path = tmp_path / "app.yaml"
     path.write_text(body, encoding="utf-8")
 

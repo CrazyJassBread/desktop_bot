@@ -7,19 +7,14 @@ const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const distRoot = join(projectRoot, "dist");
 const requiredFiles = [
   "index.html",
-  "simulator.html",
   "styles.css",
   "app.js",
-  "simulator.js",
-  "api/mock-api.mjs",
-  "services/api-client.js",
-  "services/companion-store.js",
-  "services/device-bus.js"
+  "manifest.webmanifest",
+  "services/api-client.js"
 ];
 
 for (const file of requiredFiles) {
-  const filePath = join(webRoot, file);
-  const info = await stat(filePath);
+  const info = await stat(join(webRoot, file));
   if (!info.isFile() || info.size === 0) {
     throw new Error(`Build validation failed: ${file}`);
   }
@@ -32,28 +27,19 @@ for (const marker of ["id=\"app\"", "manifest.webmanifest", "app.js"]) {
 
 await rm(distRoot, { recursive: true, force: true });
 await mkdir(distRoot, { recursive: true });
-
 for (const file of requiredFiles) {
-  const source = join(webRoot, file);
   const target = join(distRoot, file);
   await mkdir(dirname(target), { recursive: true });
-  await cp(source, target);
+  await cp(join(webRoot, file), target);
 }
-
-for (const optional of ["manifest.webmanifest", "favicon.svg"]) {
-  await cp(join(webRoot, optional), join(distRoot, optional));
-}
-
 await writeFile(
   join(distRoot, "build-meta.json"),
   JSON.stringify({
-    name: "AI Hub OS Companion + Community + Letter MVP",
-    built_at: new Date().toISOString(),
-    database: false,
-    routes: ["/", "/community", "/create-post", "/education", "/entertainment", "/life", "/match", "/letter", "/letter/create", "/device", "/profile", "/login", "/register", "/admin"],
-    api: "/api/v1 (in-memory repository MVP)",
-    transport: "REST API + DeviceBus v1 (WebSocket/MQTT gateway ready)"
+    name: "AI Hub Letter Space",
+    builtAt: new Date().toISOString(),
+    database: "SQLite",
+    routes: ["/login", "/register", "/letters"],
+    api: "/api/v1"
   }, null, 2)
 );
-
 console.log(`Build complete: ${distRoot}`);

@@ -117,6 +117,16 @@ bot_expression:
   timeout_seconds: 5
   action_duration_seconds: 2
 
+# Save completed App voice letters into both users' Web letter spaces.
+# Export the configured environment variables before starting the App.
+web_letter_sync:
+  enabled: true
+  base_url: http://127.0.0.1:18000
+  endpoint: /api/v1/app/voice-letters
+  sender_email_env: AI_HUB_SENDER_EMAIL
+  bridge_token_env: AI_HUB_BRIDGE_TOKEN
+  timeout_seconds: 10
+
 # Slowly-inspired monochrome letter layout. Completed LLM letters are rendered
 # to a PNG preview and sent through the crisp text-printing path.
 letter:

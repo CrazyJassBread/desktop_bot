@@ -263,26 +263,25 @@ python -m scripts.receive_images
 ## Web MVP
 
 网页端位于 `integrations/ai-hub-os-web`，要求 Node.js 22 或更高版本。它提供
-浏览器语音、AI Letter、社区与匹配、照片相册、设备状态和热敏打印接口。
+用户注册、登录、SQLite 信件持久化，以及收件箱和已发送信件查看。
 
 ```bash
 cd integrations/ai-hub-os-web
 cp .env.example .env.local
-npm install
+set -a
+source .env.local
+set +a
 npm run dev
 ```
 
-默认页面地址为 `http://127.0.0.1:18000`，主要入口包括：
+默认页面地址为 `http://127.0.0.1:18000`，SQLite 数据库位于
+`integrations/ai-hub-os-web/data/letters.sqlite`。
 
-- `/education`：浏览器麦克风、学习 AI 和可打印内容；
-- `/letter/create`：写信、附加照片、预览热敏模板并发送打印；
-- `/profile`：个人主页和硬件照片相册；
-- `/device`：设备状态、自动打印策略和打印队列；
-- `/simulator.html`：设备模拟器。
-
-网页端语音使用浏览器内置 Web Speech API。硬件完成拍照后，可将图片以
-multipart `image` 字段上传到 `POST /api/v1/photos/hardware`。完整接口和环境
-变量说明参见 `integrations/ai-hub-os-web/README.md`。
+App 完成语音写信后，会将信件同步到网页数据库。发件人和收件人须先注册；
+启动 App 前，将 `AI_HUB_SENDER_EMAIL` 设置为发件人的注册邮箱，并让
+`AI_HUB_BRIDGE_TOKEN` 与网页端使用相同值。同一封信只保存一条记录，但会同时
+出现在发件人的“已发送”和收件人的“收件”空间。完整配置和接口说明参见
+`integrations/ai-hub-os-web/README.md`。
 
 当前端口分配：
 

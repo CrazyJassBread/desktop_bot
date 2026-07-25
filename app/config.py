@@ -157,6 +157,16 @@ class BotExpressionConfig:
 
 
 @dataclass
+class WebLetterSyncConfig:
+    enabled: bool = False
+    base_url: str = "http://127.0.0.1:18000"
+    endpoint: str = "/api/v1/app/voice-letters"
+    sender_email_env: str = "AI_HUB_SENDER_EMAIL"
+    bridge_token_env: str = "AI_HUB_BRIDGE_TOKEN"
+    timeout_seconds: float = 10.0
+
+
+@dataclass
 class LetterConfig:
     enabled: bool = True
     auto_print: bool = True
@@ -271,6 +281,9 @@ class AppConfig:
     bot_expression: BotExpressionConfig = field(
         default_factory=BotExpressionConfig
     )
+    web_letter_sync: WebLetterSyncConfig = field(
+        default_factory=WebLetterSyncConfig
+    )
     letter: LetterConfig = field(default_factory=LetterConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     api: APIConfig = field(default_factory=APIConfig)
@@ -287,6 +300,7 @@ _SECTIONS: dict[str, type[Any]] = {
     "application": ApplicationConfig,
     "printer": PrinterConfig,
     "bot_expression": BotExpressionConfig,
+    "web_letter_sync": WebLetterSyncConfig,
     "letter": LetterConfig,
     "api": APIConfig,
 }
@@ -662,6 +676,38 @@ def _validate(config: AppConfig) -> None:
     _positive(
         config.bot_expression.action_duration_seconds,
         "bot_expression.action_duration_seconds",
+    )
+    if not isinstance(config.web_letter_sync.enabled, bool):
+        raise ConfigurationError(
+            "web_letter_sync.enabled must be a boolean"
+        )
+    if (
+        not isinstance(config.web_letter_sync.base_url, str)
+        or not config.web_letter_sync.base_url.strip()
+    ):
+        raise ConfigurationError("web_letter_sync.base_url cannot be empty")
+    if (
+        not isinstance(config.web_letter_sync.endpoint, str)
+        or not config.web_letter_sync.endpoint.startswith("/")
+    ):
+        raise ConfigurationError(
+            "web_letter_sync.endpoint must start with '/'"
+        )
+    for name, value in (
+        (
+            "web_letter_sync.sender_email_env",
+            config.web_letter_sync.sender_email_env,
+        ),
+        (
+            "web_letter_sync.bridge_token_env",
+            config.web_letter_sync.bridge_token_env,
+        ),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigurationError(f"{name} cannot be empty")
+    _positive(
+        config.web_letter_sync.timeout_seconds,
+        "web_letter_sync.timeout_seconds",
     )
     for name, value in (
         ("letter.enabled", config.letter.enabled),

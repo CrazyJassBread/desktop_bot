@@ -1,6 +1,6 @@
 {
-  "name": "ai-hub-os-web-integration",
-  "version": "0.5.0",
+  "name": "ai-hub-letter-space",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,9 +11,5 @@
   },
   "engines": {
     "node": ">=22"
-  },
-  "dependencies": {
-    "iconv-lite": "^0.7.0",
-    "sharp": "^0.35.3"
   }
 }

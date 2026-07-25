@@ -13,7 +13,7 @@ const result = spawnSync(process.execPath, ["--test", ...testFiles], {
   env: {
     ...process.env,
     NODE_ENV: "test",
-    DEEPSEEK_API_KEY: ""
+    NODE_NO_WARNINGS: "1"
   }
 });
 
