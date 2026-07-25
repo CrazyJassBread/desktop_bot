@@ -1,3 +1,4 @@
+# Web project
 node_modules/
 dist/
 .env
@@ -9,6 +10,25 @@ Thumbs.db
 output/
 .research/
 .playwright-cli/
-__pycache__/
-*.pyc
 .openai/site-archive.tar.gz
+
+# Python project
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+logs/*.log
+output/*.json
+models/*
+!models/.gitkeep
+
+# Integrations
+integrations/**/node_modules/
+integrations/**/.env
+integrations/**/.env.local
+
+# Misc
+api.txt
+records/
+received_images/
+microphone.wav
