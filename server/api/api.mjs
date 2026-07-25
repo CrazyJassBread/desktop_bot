@@ -9,6 +9,7 @@ import { waitForTcpRecording } from "../transcription/broker.mjs";
 import { stopActiveRecording } from "../transcription/control.mjs";
 import { deepSeekChat, deepSeekConfig } from "../services/deepseek-client.mjs";
 import { buildThermalLetterSvg } from "../services/thermal-letter.mjs";
+import { printVisionCapture } from "../vision/print.mjs";
 
 const SESSION_COOKIE = "aihub_session";
 const shortSessionMs = 24 * 60 * 60 * 1000;
@@ -59,7 +60,17 @@ async function requestBackendTranscript(user, language) {
 }
 
 function letterPayload(row) {
-  return { id: row.id, senderId: row.sender_id, recipientId: row.recipient_id, senderName: row.sender_name, recipientName: row.recipient_name, sourceRecordId: row.source_record_id, subject: row.subject, body: row.body, imageUrl: row.image_path ? `/api/v1/letters/${encodeURIComponent(row.id)}/image` : null, status: row.status, createdAt: row.created_at, sentAt: row.sent_at };
+  return { id: row.id, senderId: row.sender_id, recipientId: row.recipient_id, senderName: row.sender_name, recipientName: row.recipient_name, sourceRecordId: row.source_record_id, subject: row.subject, body: row.body, imageUrl: row.image_path ? `/api/v1/letters/${encodeURIComponent(row.id)}/image` : null, photoId: row.photo_id || null, photoUrl: row.photo_id ? `/api/v1/photos/${encodeURIComponent(row.photo_id)}/image` : null, status: row.status, createdAt: row.created_at, sentAt: row.sent_at };
+}
+
+function ownedPhoto(userId, photoId) {
+  if (!photoId) return null;
+  return db.prepare("SELECT * FROM photos WHERE id=? AND user_id=?").get(String(photoId), userId) || null;
+}
+
+async function photoDataUrl(fileName) {
+  if (!fileName) return null;
+  return `data:image/png;base64,${(await readFile(join(generatedRoot, fileName))).toString("base64")}`;
 }
 
 function json(response, status, body, headers = {}) {
@@ -77,7 +88,7 @@ async function readJson(request) {
   let length = 0;
   for await (const chunk of request) {
     length += chunk.length;
-    if (length > 256_000) throw new Error("PAYLOAD_TOO_LARGE");
+    if (length > 1_500_000) throw new Error("PAYLOAD_TOO_LARGE");
     chunks.push(chunk);
   }
   if (!length) return {};
@@ -225,6 +236,44 @@ export async function handleApiRequest(request, response, requestId) {
     if (method === "GET" && path === "/records") {
       return json(response, 200, { items: db.prepare("SELECT id,title,transcript,summary,status,created_at AS createdAt FROM records WHERE user_id=? ORDER BY created_at DESC").all(user.id) });
     }
+    if (method === "GET" && path === "/photos") {
+      const items = db.prepare("SELECT id,width,height,created_at FROM photos WHERE user_id=? ORDER BY created_at DESC").all(user.id)
+        .map((photo) => ({ id: photo.id, width: photo.width, height: photo.height, createdAt: photo.created_at, imageUrl: `/api/v1/photos/${encodeURIComponent(photo.id)}/image` }));
+      return json(response, 200, { items });
+    }
+    if (method === "POST" && path === "/photos") {
+      const body = await readJson(request);
+      const match = String(body.imageDataUrl || "").match(/^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/);
+      if (!match) return problem(response, 422, "INVALID_PHOTO", "A PNG photo is required.", requestId);
+      const bytes = Buffer.from(match[1], "base64");
+      if (!bytes.length || bytes.length > 1_000_000) return problem(response, 422, "INVALID_PHOTO", "The photo is too large.", requestId);
+      let metadata;
+      try { metadata = await sharp(bytes).metadata(); } catch { return problem(response, 422, "INVALID_PHOTO", "The photo could not be decoded.", requestId); }
+      if (metadata.format !== "png" || metadata.width !== 384 || !metadata.height || metadata.height > 1200) {
+        return problem(response, 422, "INVALID_PHOTO", "The pixel photo must be a 384px-wide PNG.", requestId);
+      }
+      const id = `photo-${randomUUID()}`;
+      const fileName = `${id}.png`;
+      await mkdir(generatedRoot, { recursive: true });
+      await writeFile(join(generatedRoot, fileName), await sharp(bytes).png({ compressionLevel: 9 }).toBuffer());
+      db.prepare("INSERT INTO photos (id,user_id,file_name,width,height) VALUES (?,?,?,?,?)").run(id, user.id, fileName, metadata.width, metadata.height);
+      return json(response, 201, { photo: { id, width: metadata.width, height: metadata.height, imageUrl: `/api/v1/photos/${encodeURIComponent(id)}/image` } });
+    }
+    const photoImageMatch = path.match(/^\/photos\/([^/]+)\/image$/);
+    if (method === "GET" && photoImageMatch) {
+      const photo = db.prepare(`SELECT p.file_name FROM photos p WHERE p.id=? AND (
+        p.user_id=? OR EXISTS (SELECT 1 FROM letters l WHERE l.photo_id=p.id AND (l.sender_id=? OR (l.recipient_id=? AND l.status<>'draft')))
+      )`).get(photoImageMatch[1], user.id, user.id, user.id);
+      if (!photo) return problem(response, 404, "NOT_FOUND", "Photo not found.", requestId);
+      const bytes = await readFile(join(generatedRoot, photo.file_name));
+      response.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff" });
+      response.end(bytes);
+      return true;
+    }
+    if (method === "POST" && path === "/vision/print") {
+      const result = await printVisionCapture(await readJson(request));
+      return json(response, 200, result);
+    }
     if (method === "POST" && path === "/recordings/start") {
       const body = await readJson(request);
       const language = body.language === "en" ? "en" : "zh";
@@ -270,7 +319,10 @@ export async function handleApiRequest(request, response, requestId) {
     if (method === "POST" && generateMatch) {
       const body = await readJson(request);
       const record = db.prepare("SELECT * FROM records WHERE id=? AND user_id=?").get(generateMatch[1], user.id);
-      const recipient = db.prepare(`SELECT u.* FROM friendships f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.friend_id=? AND f.status='accepted'`).get(user.id, String(body.recipientId || ""));
+      const recipientId = String(body.recipientId || "");
+      const recipient = recipientId === user.id
+        ? user
+        : db.prepare(`SELECT u.* FROM friendships f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.friend_id=? AND f.status='accepted'`).get(user.id, recipientId);
       if (!record) return problem(response, 404, "NOT_FOUND", "Record not found.", requestId);
       if (!recipient) return problem(response, 422, "INVALID_RECIPIENT", "Choose someone from your social circle.", requestId);
       const generated = await generateLetterWithAi(record, recipient, user);
@@ -289,30 +341,43 @@ export async function handleApiRequest(request, response, requestId) {
     }
     if (method === "POST" && path === "/letters") {
       const body = await readJson(request);
-      const recipient = db.prepare(`SELECT u.* FROM friendships f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.friend_id=? AND f.status='accepted'`).get(user.id, String(body.recipientId || ""));
+      const recipientId = String(body.recipientId || "");
+      const recipient = recipientId === user.id
+        ? user
+        : db.prepare(`SELECT u.* FROM friendships f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.friend_id=? AND f.status='accepted'`).get(user.id, recipientId);
       const subject = String(body.subject || "").trim().slice(0, 120);
       const content = String(body.body || "").trim().slice(0, 3000);
+      const photo = ownedPhoto(user.id, body.photoId);
+      if (body.photoId && !photo) return problem(response, 422, "INVALID_PHOTO", "Choose a photo from your wall.", requestId);
       if (!recipient || !subject || !content) return problem(response, 422, "INVALID_LETTER", "Choose a friend and complete the subject and letter.", requestId);
       const id = `ltr-${randomUUID()}`;
-      db.prepare("INSERT INTO letters (id,sender_id,recipient_id,subject,body,status) VALUES (?,?,?,?,?,'draft')").run(id, user.id, recipient.id, subject, content);
-      return json(response, 201, { letter: { id, recipientId: recipient.id, recipientName: recipient.display_name, subject, body: content, status: "draft" } });
+      db.prepare("INSERT INTO letters (id,sender_id,recipient_id,subject,body,photo_id,status) VALUES (?,?,?,?,?,?,'draft')").run(id, user.id, recipient.id, subject, content, photo?.id || null);
+      return json(response, 201, { letter: { id, recipientId: recipient.id, recipientName: recipient.display_name, subject, body: content, photoId: photo?.id || null, status: "draft" } });
     }
     const letterUpdateMatch = path.match(/^\/letters\/([^/]+)$/);
     if (method === "PATCH" && letterUpdateMatch) {
       const body = await readJson(request);
       const letter = db.prepare("SELECT * FROM letters WHERE id=? AND sender_id=? AND status='draft'").get(letterUpdateMatch[1], user.id);
       if (!letter) return problem(response, 404, "NOT_FOUND", "Editable draft not found.", requestId);
+      const requestedRecipientId = String(body.recipientId || letter.recipient_id);
+      const recipient = requestedRecipientId === user.id
+        ? user
+        : db.prepare(`SELECT u.* FROM friendships f JOIN users u ON u.id=f.friend_id WHERE f.user_id=? AND f.friend_id=? AND f.status='accepted'`).get(user.id, requestedRecipientId);
+      if (!recipient) return problem(response, 422, "INVALID_RECIPIENT", "Choose yourself or someone from your social circle.", requestId);
       const subject = String(body.subject || letter.subject).trim().slice(0, 120);
       const content = String(body.body || letter.body).trim().slice(0, 3000);
+      const requestedPhotoId = Object.hasOwn(body, "photoId") ? body.photoId : letter.photo_id;
+      const photo = ownedPhoto(user.id, requestedPhotoId);
+      if (requestedPhotoId && !photo) return problem(response, 422, "INVALID_PHOTO", "Choose a photo from your wall.", requestId);
       if (!subject || !content) return problem(response, 422, "INVALID_LETTER", "Subject and letter body are required.", requestId);
-      db.prepare("UPDATE letters SET subject=?,body=?,image_path=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(subject, content, letter.id);
-      return json(response, 200, { letter: { id: letter.id, recipientId: letter.recipient_id, subject, body: content, status: "draft" } });
+      db.prepare("UPDATE letters SET recipient_id=?,subject=?,body=?,photo_id=?,image_path=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?").run(recipient.id, subject, content, photo?.id || null, letter.id);
+      return json(response, 200, { letter: { id: letter.id, recipientId: recipient.id, recipientName: recipient.display_name, subject, body: content, photoId: photo?.id || null, status: "draft" } });
     }
     const renderMatch = path.match(/^\/letters\/([^/]+)\/render$/);
     if (method === "POST" && renderMatch) {
-      const letter = db.prepare(`SELECT l.*,s.display_name sender_name,r.display_name recipient_name FROM letters l JOIN users s ON s.id=l.sender_id JOIN users r ON r.id=l.recipient_id WHERE l.id=? AND l.sender_id=?`).get(renderMatch[1], user.id);
+      const letter = db.prepare(`SELECT l.*,s.display_name sender_name,r.display_name recipient_name,p.file_name photo_file_name FROM letters l JOIN users s ON s.id=l.sender_id JOIN users r ON r.id=l.recipient_id LEFT JOIN photos p ON p.id=l.photo_id WHERE l.id=? AND l.sender_id=?`).get(renderMatch[1], user.id);
       if (!letter) return problem(response, 404, "NOT_FOUND", "Letter not found.", requestId);
-      const rendered = buildThermalLetterSvg({ letterId: letter.id, sender: letter.sender_name, recipient: letter.recipient_name, subject: letter.subject, body: letter.body, date: new Date().toISOString().slice(0, 10) });
+      const rendered = buildThermalLetterSvg({ letterId: letter.id, sender: letter.sender_name, recipient: letter.recipient_name, subject: letter.subject, body: letter.body, date: new Date().toISOString().slice(0, 10), attachmentImageDataUrl: await photoDataUrl(letter.photo_file_name), attachmentCaption: "PIXEL MEMORY" });
       await mkdir(generatedRoot, { recursive: true });
       const fileName = `${letter.id}.png`;
       await writeFile(join(generatedRoot, fileName), await sharp(Buffer.from(rendered.svg)).flatten({ background: "#ffffff" }).png().toBuffer());
@@ -370,7 +435,8 @@ export async function handleApiRequest(request, response, requestId) {
     return problem(response, 404, "NOT_FOUND", "API endpoint not found.", requestId);
   } catch (error) {
     console.error(error);
-    problem(response, error.message === "PAYLOAD_TOO_LARGE" ? 413 : 500, "SERVER_ERROR", "The request could not be completed.", requestId);
+    const status = error.message === "PAYLOAD_TOO_LARGE" ? 413 : error.statusCode || 500;
+    problem(response, status, status < 500 ? error.message : "SERVER_ERROR", status < 500 ? "The print image is invalid." : "The request could not be completed.", requestId);
   }
   return true;
 }

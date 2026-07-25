@@ -85,7 +85,7 @@ export function buildThermalLetterSvg(input = {}) {
   const letterId = String(input.letterId ?? "PREVIEW").replace(/[^a-zA-Z0-9_-]/g, "").slice(-10) || "PREVIEW";
   const pageIndex = Math.max(0, Number(input.pageIndex ?? 0) || 0);
   const pageCount = Math.max(1, Number(input.pageCount ?? 1) || 1);
-  const attachment = pageIndex === 0 ? letterAttachment(input) : null;
+  const attachment = input.includeAttachment === false ? null : letterAttachment(input);
 
   const titleLines = wrapText(subject, 12.2, 2);
   const bodyLines = wrapText(body || "愿这张小小的纸，替我把此刻的心意送到你身边。", 16.2, MAX_BODY_LINES);
@@ -95,10 +95,10 @@ export function buildThermalLetterSvg(input = {}) {
   const titleStartY = 195;
   const titleLineHeight = 37;
   const metaY = titleStartY + titleLines.length * titleLineHeight + 7;
-  const attachmentBlockHeight = attachment ? attachment.height + 40 : 0;
-  const attachmentY = metaY + 78;
-  const bodyStartY = metaY + 96 + attachmentBlockHeight;
-  const footerY = bodyStartY + bodyLines.length * BODY_LINE_HEIGHT + 38;
+  const bodyStartY = metaY + 96;
+  const attachmentBlockHeight = attachment ? attachment.height + 52 : 0;
+  const attachmentY = bodyStartY + bodyLines.length * BODY_LINE_HEIGHT + 20;
+  const footerY = bodyStartY + bodyLines.length * BODY_LINE_HEIGHT + attachmentBlockHeight + 38;
   const height = Math.max(620, footerY + 118);
 
   const titleSvg = textRows(titleLines, titleStartY, titleLineHeight, 'class="title"');
@@ -147,15 +147,24 @@ function buildContinuationPageSvg(input, bodyLines, pageIndex, pageCount) {
   const sender = String(input.sender ?? "AI Hub Friend").trim().slice(0, 36);
   const recipient = String(input.recipient ?? "A Dear Friend").trim().slice(0, 36);
   const bodyStartY = 154;
-  const footerY = bodyStartY + bodyLines.length * BODY_LINE_HEIGHT + 28;
+  const attachment = input.includeAttachment ? letterAttachment(input) : null;
+  const attachmentY = bodyStartY + bodyLines.length * BODY_LINE_HEIGHT + 18;
+  const attachmentBlockHeight = attachment ? attachment.height + 48 : 0;
+  const footerY = bodyStartY + bodyLines.length * BODY_LINE_HEIGHT + attachmentBlockHeight + 28;
   const height = Math.max(360, footerY + 82);
   const bodySvg = textRows(bodyLines, bodyStartY, BODY_LINE_HEIGHT, 'class="body"');
+  const attachmentSvg = attachment ? `
+    <g class="attachment">
+      <rect x="${attachment.x - 7}" y="${attachmentY - 7}" width="${attachment.width + 14}" height="${attachment.height + 14}" rx="6" fill="#fff" stroke="#000" stroke-width="1.5"/>
+      <image x="${attachment.x}" y="${attachmentY}" width="${attachment.width}" height="${attachment.height}" href="${escapeXml(attachment.dataUrl)}" preserveAspectRatio="xMidYMid meet"/>
+      <text x="192" y="${attachmentY + attachment.height + 27}" text-anchor="middle" class="caption">${escapeXml(attachment.caption)}</text>
+    </g>` : "";
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${THERMAL_PRINTER_WIDTH}" height="${height}" viewBox="0 0 ${THERMAL_PRINTER_WIDTH} ${height}">
     <rect width="100%" height="100%" fill="#fff"/>
     <style>
       text{fill:#000;font-family:"Microsoft YaHei","PingFang SC","Noto Sans CJK SC","Arial",sans-serif}
       .micro{font-size:10px;font-weight:800;letter-spacing:1.5px}.title{font-size:19px;font-weight:900}
-      .body{font-size:${BODY_FONT_SIZE}px;font-weight:500}.meta{font-size:11px;font-weight:700}.page{font-size:14px;font-weight:900}
+      .body{font-size:${BODY_FONT_SIZE}px;font-weight:500}.meta{font-size:11px;font-weight:700}.page{font-size:14px;font-weight:900}.caption{font-size:10px;font-weight:800;letter-spacing:1.3px}
     </style>
     <rect x="10" y="10" width="364" height="${height - 20}" rx="16" fill="none" stroke="#000" stroke-width="2"/>
     <rect x="18" y="18" width="348" height="${height - 36}" rx="11" fill="none" stroke="#000" stroke-width="1" stroke-dasharray="4 5"/>
@@ -167,6 +176,7 @@ function buildContinuationPageSvg(input, bodyLines, pageIndex, pageCount) {
     <text x="26" y="122" class="meta">TO ${escapeXml(recipient)} · FROM ${escapeXml(sender)}</text>
     <path d="M26 134 H358" stroke="#000" stroke-width="1" stroke-dasharray="3 4"/>
     ${bodySvg}
+    ${attachmentSvg}
     <path d="M26 ${footerY} H358" stroke="#000" stroke-width="1"/>
     <text x="26" y="${footerY + 27}" class="micro">CONTINUED LETTER · ${pageIndex + 1}/${pageCount}</text>
   </svg>`;
@@ -178,8 +188,9 @@ export function paginateThermalLetter(input = {}) {
   const allLines = wrapText(rawBody || "愿这张小小的纸，替我把此刻的心意送到你身边。", 16.2, MAX_BODY_LINES);
   const bodyWasClipped = wrapText(rawBody, 16.2, MAX_BODY_LINES + 1).length > MAX_BODY_LINES;
   if (bodyWasClipped && allLines.length) allLines[allLines.length - 1] = `${allLines.at(-1).slice(0, -1)}…`;
-  const firstPageLineCount = letterAttachment(input) ? 3 : 7;
-  const continuationLineCount = 14;
+  const attachment = letterAttachment(input);
+  const firstPageLineCount = attachment ? 3 : 7;
+  const continuationLineCount = attachment ? 8 : 14;
   const groups = [allLines.slice(0, firstPageLineCount)];
   for (let offset = firstPageLineCount; offset < allLines.length; offset += continuationLineCount) {
     groups.push(allLines.slice(offset, offset + continuationLineCount));
@@ -191,12 +202,13 @@ export function paginateThermalLetter(input = {}) {
         ...input,
         body: bodyLines.join("\n"),
         pageIndex,
-        pageCount
+        pageCount,
+        includeAttachment: pageIndex === pageCount - 1
       });
       return { ...page, pageIndex, bodyLines };
     }
     return {
-      ...buildContinuationPageSvg(input, bodyLines, pageIndex, pageCount),
+      ...buildContinuationPageSvg({ ...input, includeAttachment: pageIndex === pageCount - 1 }, bodyLines, pageIndex, pageCount),
       pageIndex,
       bodyLines,
       bodyWasClipped: false

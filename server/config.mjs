@@ -25,8 +25,12 @@ export const config = Object.freeze({
     vadSilenceMs: Number.parseInt(process.env.TRANSCRIPTION_VAD_SILENCE_MS || "1200", 10),
     stopGraceMs: Number.parseInt(process.env.TRANSCRIPTION_STOP_GRACE_MS || "2000", 10)
   },
+  vision: {
+    httpHost: process.env.VISION_HTTP_HOST || "0.0.0.0",
+    httpPort: Number.parseInt(process.env.VISION_HTTP_PORT || "8081", 10)
+  },
   printer: {
-    baseUrl: baseUrl(process.env.ESP_PRINTER_BASE_URL),
+    baseUrl: baseUrl(process.env.ESP_PRINTER_BASE_URL || "http://10.76.0.126"),
     autoSend: process.env.PRINTER_AUTO_SEND === "true",
     timeoutMs: Number.parseInt(process.env.PRINTER_TIMEOUT_MS || "30000", 10),
     rotate180: process.env.PRINTER_ROTATE_180 !== "false"

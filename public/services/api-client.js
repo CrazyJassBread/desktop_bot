@@ -47,6 +47,9 @@ export const api = {
   sendLetter: (id) => write(`/letters/${encodeURIComponent(id)}/send`, "POST"),
   printJobs: () => request("/print-jobs"),
   updatePrintJob: (id, status) => write(`/print-jobs/${encodeURIComponent(id)}/status`, "POST", { status }),
+  printVision: (payload) => write("/vision/print", "POST", payload),
+  photos: () => request("/photos"),
+  savePhoto: (payload) => write("/photos", "POST", payload),
   account: () => request("/account"),
   updateAccount: (payload) => write("/account", "PATCH", payload)
 };

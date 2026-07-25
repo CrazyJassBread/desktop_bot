@@ -5,3 +5,5 @@ data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
 data/generated/
+public/models/
+public/vendor/

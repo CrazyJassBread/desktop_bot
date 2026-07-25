@@ -72,6 +72,45 @@ Pure PCM contains no identity or end marker. Therefore this MVP binds a complete
 
 The server receives sockets asynchronously and permits several OpenAI requests concurrently. Worker threads are intentionally not used: network and OpenAI calls are I/O-bound, and copying audio between threads would add overhead. `TRANSCRIPTION_CONCURRENCY` limits simultaneous OpenAI calls.
 
+## Firmware vision protocol
+
+The existing web service accepts raw 640×480 JPEG frames, so no separate
+Python vision service is needed:
+
+```http
+POST http://<computer-ip>:8081/upload HTTP/1.1
+Content-Type: image/jpeg
+X-Session-ID: bot
+
+<raw JPEG bytes>
+```
+
+`POST /vision/upload` is also available on port 8081 as a compatibility alias.
+The microphone remains on TCP port 8080. Open the **视觉 / Vision** page while
+the firmware is streaming.
+MediaPipe Gesture Recognizer runs in the browser. A stable Victory gesture
+(at least 3 hits in the latest 5 processed frames) captures the frame and
+creates a 384-pixel-wide, four-level grayscale pixel-art image using 4×4
+blocks, enhanced contrast, and a thickened Canny outline. The original photo
+and processed PNG can then be downloaded. The processed result is also
+packed as a 1-bit Floyd–Steinberg-dithered bitmap and printed automatically
+through the configured printer (`http://10.76.0.126` by default).
+
+Each captured pixel-art PNG is also stored in the signed-in user's private
+photo wall. When composing a letter, the sender may select one photo from that
+wall. The attachment appears after the letter body in the web view, rendered
+letter preview, and thermal-printer output. Recipients can view an attached
+photo after the letter is sent, but cannot browse the sender's photo wall.
+
+Generating a letter from a voice record opens the letter review directly. Its
+recipient row is an editable selector containing every accepted friend and the
+sender themselves; self-addressed letters enter the sender's own print queue
+after being rendered and sent.
+
+MediaPipe Web assets and `models/gesture_recognizer.task` are copied into the
+static bundle automatically by `npm start`, `npm run dev`, and
+`npm run build`.
+
 ## OpenAI transcription
 
 Raw PCM is wrapped in-memory as a 16 kHz mono PCM WAV, then uploaded to `/v1/audio/transcriptions` as multipart form data. The default model is `gpt-4o-mini-transcribe`.
@@ -99,6 +138,10 @@ Content-Type: application/octet-stream
 <packed bitmap bytes>
 ```
 
+After a complete letter or Victory pixel image is printed, the server calls
+`POST /printer/feed?lines=3`. Multi-page letter batches stay together; the
+three blank lines are added only after the final batch.
+
 Configuration:
 
 ```dotenv
@@ -108,7 +151,7 @@ PRINTER_TIMEOUT_MS=30000
 PRINTER_ROTATE_180=true
 ```
 
-Keep `PRINTER_AUTO_SEND=false` until the ESP address and paper direction are confirmed. Print jobs remain queued when no printer is configured. Printing does not depend on the recipient's browser being open.
+Keep `PRINTER_AUTO_SEND=false` until the ESP address and paper direction are confirmed. With this setting, ordinary recipient jobs remain queued, while self-addressed letters print automatically. Printing does not depend on the recipient's browser being open.
 
 ## Demo accounts
 

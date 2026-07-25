@@ -7,12 +7,17 @@ const distRoot = join(projectRoot, "dist");
 const required = [
   "server.mjs",
   "server/config.mjs",
+  "server/vision/frame-store.mjs",
+  "server/vision/http-server.mjs",
+  "server/vision/print.mjs",
   "server/api/api.mjs",
   "server/api/database.mjs",
   "server/services/deepseek-client.mjs",
   "server/services/thermal-letter.mjs",
   "public/index.html",
   "public/app.js",
+  "public/vision/receiver.js",
+  "public/vision/processing.js",
   "public/styles.css",
   "public/services/api-client.js"
 ];
@@ -37,7 +42,7 @@ await writeFile(join(distRoot, "build-meta.json"), JSON.stringify({
   name: "Paper Bridge hackathon MVP",
   builtAt: new Date().toISOString(),
   database: "SQLite",
-  routes: ["/", "/login", "/register", "/records", "/circle", "/letters", "/profile"],
+  routes: ["/", "/login", "/register", "/records", "/circle", "/letters", "/photos", "/vision", "/profile"],
   transport: "Same-origin REST with server-side LAN backend adapter"
 }, null, 2));
 console.log(`Build complete: ${distRoot}`);

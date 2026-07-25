@@ -6,19 +6,24 @@ import { handleApiRequest } from "./server/api/api.mjs";
 import { config } from "./server/config.mjs";
 import { startPcmTcpServer } from "./server/transcription/tcp-server.mjs";
 import { startPrintWorker } from "./server/printing/worker.mjs";
+import { createVisionFrameStore } from "./server/vision/frame-store.mjs";
+import { startVisionHttpServer } from "./server/vision/http-server.mjs";
 
 const appRoot = fileURLToPath(new URL("./public/", import.meta.url));
 const port = config.server.port;
 const host = config.server.host;
+const visionFrames = createVisionFrameStore();
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
   ".ico": "image/x-icon",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".map": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".wasm": "application/wasm",
   ".webmanifest": "application/manifest+json; charset=utf-8"
 };
 
@@ -65,12 +70,34 @@ const server = createServer(async (request, response) => {
       service: "paper-bridge-mvp",
       database: "sqlite",
       transcription_tcp: `${config.transcription.tcpHost}:${config.transcription.tcpPort}`,
+      vision_http: `${config.vision.httpHost}:${config.vision.httpPort}`,
       openai_configured: Boolean(config.transcription.apiKey),
       printer_configured: Boolean(config.printer.baseUrl),
       api: "/api/v1",
       uptime_seconds: Math.round(process.uptime()),
       request_id: requestId
     });
+  }
+
+  const requestUrl = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+  if (request.method === "GET" && requestUrl.pathname === "/vision/latest") {
+    const frame = visionFrames.getLatest(requestUrl.searchParams.get("after") || "");
+    if (!frame) {
+      response.writeHead(204, { "Cache-Control": "no-store" });
+      return response.end();
+    }
+    response.writeHead(200, {
+      "Content-Type": "image/jpeg",
+      "Content-Length": frame.image.length,
+      "Cache-Control": "no-store",
+      "X-Frame-ID": frame.id,
+      "X-Frame-Received-At": String(frame.receivedAt)
+    });
+    return response.end(frame.image);
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/vision/status") {
+    return sendJson(response, 200, visionFrames.status());
   }
 
   if (await handleApiRequest(request, response, requestId)) return;
@@ -103,11 +130,12 @@ const server = createServer(async (request, response) => {
     "Cache-Control": [".html", ".js", ".css"].includes(extension) ? "no-cache" : "public, max-age=300",
     "Content-Security-Policy": [
       "default-src 'self'",
-      "script-src 'self'",
+      "script-src 'self' 'wasm-unsafe-eval'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
+      "img-src 'self' data: blob:",
       "connect-src 'self'",
       "font-src 'self'",
+      "worker-src 'self' blob:",
       "object-src 'none'",
       "base-uri 'self'",
       "frame-ancestors 'none'"
@@ -129,12 +157,19 @@ server.listen(port, host, () => {
 });
 
 const pcmTcpServer = startPcmTcpServer();
+const visionHttpServer = startVisionHttpServer(visionFrames, {
+  host: config.vision.httpHost,
+  port: config.vision.httpPort
+});
 const printWorker = startPrintWorker();
 
 function shutdown() {
   printWorker.stop();
-  pcmTcpServer.close();
-  server.close(() => process.exit(0));
+  Promise.all([
+    new Promise((resolve) => pcmTcpServer.close(resolve)),
+    new Promise((resolve) => visionHttpServer.close(resolve)),
+    new Promise((resolve) => server.close(resolve))
+  ]).then(() => process.exit(0));
   setTimeout(() => process.exit(1), 5_000).unref();
 }
 

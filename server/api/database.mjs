@@ -87,6 +87,15 @@ db.exec(`
     completed_at TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_recording_jobs_user ON recording_jobs(user_id, requested_at DESC);
+  CREATE TABLE IF NOT EXISTS photos (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL UNIQUE,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_photos_user ON photos(user_id, created_at DESC);
   CREATE TABLE IF NOT EXISTS letters (
     id TEXT PRIMARY KEY,
     sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -95,6 +104,7 @@ db.exec(`
     subject TEXT NOT NULL,
     body TEXT NOT NULL,
     image_path TEXT,
+    photo_id TEXT REFERENCES photos(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','received','queued','printed','failed')),
     sent_at TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -121,6 +131,11 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id,created_at DESC);
 `);
+
+const letterColumns = db.prepare("PRAGMA table_info(letters)").all().map((column) => column.name);
+if (!letterColumns.includes("photo_id")) {
+  db.exec("ALTER TABLE letters ADD COLUMN photo_id TEXT REFERENCES photos(id) ON DELETE SET NULL");
+}
 
 const seedUsers = [
   ["usr-lin", "hello@aihub.local", "Demo1234", "Lin An", "zh"],

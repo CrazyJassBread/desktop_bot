@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
 import { createConnection } from "node:net";
 import test from "node:test";
-import { sendBitmap } from "../server/printing/printer-client.mjs";
+import { sendBitmap, sendFeed } from "../server/printing/printer-client.mjs";
 import { waitForTcpRecording } from "../server/transcription/broker.mjs";
 import { createPcmTcpServer } from "../server/transcription/tcp-server.mjs";
 import { pcm16leToWav } from "../server/transcription/wav.mjs";
 import { sendExpression } from "../server/device/oled-client.mjs";
+import { shouldAutoPrintLetter } from "../server/printing/worker.mjs";
 
 test("PCM16 LE is wrapped in a valid 16 kHz mono WAV", () => {
   const wav = pcm16leToWav(Buffer.alloc(3_200));
@@ -95,6 +96,18 @@ test("printer transport sends packed bitmap bytes with width and height", async 
   await new Promise((resolve) => printer.close(resolve));
 });
 
+test("printer feed advances three blank lines after content", async () => {
+  let received;
+  const printer = createHttpServer((request, response) => {
+    received = { url: request.url, method: request.method };
+    response.writeHead(200).end("ok");
+  });
+  await new Promise((resolve) => printer.listen(0, "127.0.0.1", resolve));
+  await sendFeed(3, { baseUrl: `http://127.0.0.1:${printer.address().port}` });
+  assert.deepEqual(received, { url: "/printer/feed?lines=3", method: "POST" });
+  await new Promise((resolve) => printer.close(resolve));
+});
+
 test("OLED transport posts the requested expression", async () => {
   let received;
   const oled = createHttpServer(async (request, response) => {
@@ -109,4 +122,10 @@ test("OLED transport posts the requested expression", async () => {
   assert.equal(received.type, "application/json");
   assert.deepEqual(received.body, { expression: "happy" });
   await new Promise((resolve) => oled.close(resolve));
+});
+
+test("self-addressed letters auto-print even when general auto-send is disabled", () => {
+  assert.equal(shouldAutoPrintLetter("usr-self", "usr-self", false), true);
+  assert.equal(shouldAutoPrintLetter("usr-sender", "usr-recipient", false), false);
+  assert.equal(shouldAutoPrintLetter("usr-sender", "usr-recipient", true), true);
 });
